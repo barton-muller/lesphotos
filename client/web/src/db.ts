@@ -29,7 +29,10 @@ export interface CachedPhoto {
   // with .where('favorite').equals(...) - matches server/appdb's own
   // `favorite INTEGER` column for the same reason.
   favorite: 0 | 1
-  thumbnailBlob: Blob
+  // Optional: a metadata-only sync stores the row without pixels and the
+  // grid fills them in as tiles come into view (see thumbnails.ts). A row
+  // that has one is offline-capable; one that does not needs the server.
+  thumbnailBlob?: Blob
   width: number
   height: number
   // Videos render as a normal tile with a play badge and duration; the

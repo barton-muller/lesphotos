@@ -23,7 +23,10 @@ const APPROX_THUMB_BYTES = 20 * 1024
 // than a smarter diff - see the decision doc.
 export class QuotaError extends Error {}
 
-export async function syncTimeline(onProgress?: (done: number, total: number) => void) {
+export async function syncTimeline(
+  onProgress?: (done: number, total: number) => void,
+  { thumbnails = true }: { thumbnails?: boolean } = {},
+) {
   // Ask once per session for the cache not to be treated as discardable.
   // Deliberately not awaited into a branch: a refusal is normal (Safari
   // always refuses on iOS) and changes nothing about how sync proceeds - the
@@ -80,8 +83,17 @@ export async function syncTimeline(onProgress?: (done: number, total: number) =>
   const total = toFetch.length + toUpdate.length
   let done = 0
   for (const r of toFetch) {
-    const resp = await fetch(thumbUrl(r.id), { credentials: 'include' })
-    if (!resp.ok) continue
+    // thumbnails:false stores metadata only - the timeline appears at once
+    // and the grid pulls each thumbnail as it scrolls into view. That is
+    // what makes a new device usable immediately instead of after a full
+    // library download; "Sync all" then runs this with thumbnails:true to
+    // make the whole library offline-capable.
+    let blob: Blob | undefined
+    if (thumbnails) {
+      const resp = await fetch(thumbUrl(r.id), { credentials: 'include' })
+      if (!resp.ok) continue
+      blob = await resp.blob()
+    }
     await db.photos.put({
       id: r.id,
       path: r.path,
@@ -89,7 +101,7 @@ export async function syncTimeline(onProgress?: (done: number, total: number) =>
       momentPath: r.momentPath,
       date: r.date,
       favorite: r.favorite ? 1 : 0,
-      thumbnailBlob: await resp.blob(),
+      thumbnailBlob: blob,
       width: r.width ?? 0,
       height: r.height ?? 0,
       isVideo: r.isVideo ? 1 : 0,

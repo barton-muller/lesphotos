@@ -128,6 +128,11 @@ consistent history of otherwise-correct-looking code failing at real library siz
   in-flight full-res fetch was cancelled repeatedly and the viewer showed the thumbnail
   forever. Key on `photo.id`. Related: don't revoke an object URL in the same effect's
   cleanup — revoke it when its replacement is ready.
+- **`thumbnailBlob` is optional.** A sync stores metadata only by default and the grid
+  fetches each thumbnail as its tile scrolls into view, so a new device is usable at once
+  instead of after a full-library download. "Download all for offline" is the explicit
+  opt-in that makes the whole library offline-capable. Anything reading a row must handle
+  a missing blob.
 - **A stable primary key means "already cached" no longer means "unchanged".** `sync.ts` must
   diff metadata, not just key presence: a rename keeps the same `photo_id` by design, so an
   id-presence check alone silently skips every moved photo forever.

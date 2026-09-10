@@ -1,3 +1,4 @@
+import { thumbUrl } from './api'
 import { db } from './db'
 
 /**
@@ -138,6 +139,22 @@ export function peekThumbnailUrl(id: string): string | null {
  * Load one thumbnail's object URL, reading the blob from IndexedDB if needed.
  * Concurrent calls for the same id share one read.
  */
+/**
+ * One thumbnail from the server, or null if it cannot be had.
+ *
+ * Same URL and credentials as the bulk sync uses - this is the same
+ * request, made one tile at a time instead of all at once.
+ */
+async function fetchThumbnailBlob(id: string): Promise<Blob | null> {
+  try {
+    const resp = await fetch(thumbUrl(id), { credentials: 'include' })
+    return resp.ok ? await resp.blob() : null
+  } catch {
+    return null
+  }
+}
+
+
 export function loadThumbnailUrl(id: string): Promise<string | null> {
   const existing = peekThumbnailUrl(id)
   if (existing) return Promise.resolve(existing)
@@ -148,10 +165,34 @@ export function loadThumbnailUrl(id: string): Promise<string | null> {
 
   const promise = db.photos
     .get(id)
-    .then((row) => {
+    .then(async (row) => {
       if (!row?.thumbnailBlob) {
-        missing.set(id, Date.now())
-        return null
+        // No blob on device yet. Fetch it and keep it, so a device that
+        // has only synced metadata fills in as you scroll instead of
+        // needing the whole library downloaded up front.
+        //
+        // Failure is deliberately not special-cased: MISSING_TTL_MS is
+        // 2s, so a tile that failed simply retries the next time it is
+        // scrolled past. Most of the time the library is fully synced and
+        // this path never runs at all.
+        const blob = await fetchThumbnailBlob(id)
+        if (!blob) {
+          missing.set(id, Date.now())
+          return null
+        }
+        // Store it so the next open reads from IndexedDB, and so a photo
+        // viewed once is offline-capable thereafter. A write failure (quota)
+        // still yields a usable URL for this session.
+        db.photos.update(id, { thumbnailBlob: blob }).catch(() => {})
+        const already = entries.get(id)
+        if (already) {
+          already.seq = ++seqCounter
+          return already.url
+        }
+        const url = URL.createObjectURL(blob)
+        entries.set(id, { url, seq: ++seqCounter })
+        evictIfNeeded()
+        return url
       }
       // Another caller may have won the race while this read was in flight.
       const already = entries.get(id)

@@ -81,12 +81,15 @@ function App() {
   // same tick would both get through.
   const syncing = useRef(false)
 
-  async function runSync() {
+  async function runSync(thumbnails = false) {
     if (syncing.current) return
     syncing.current = true
     setSyncStatus('syncing')
     try {
-      const result = await syncTimeline((done, total) => setSyncMessage(`${done}/${total}`))
+      const result = await syncTimeline(
+        (done, total) => setSyncMessage(`${done}/${total}`),
+        { thumbnails },
+      )
       setServerUnreachable('')
       setSyncStatus('done')
       setSyncMessage(
@@ -384,6 +387,18 @@ function App() {
                 style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px' }}
               >
                 Sync now
+              </button>
+              <button
+                type="button"
+                data-testid="sync-all"
+                title="Download every thumbnail so the whole library works offline"
+                onClick={() => {
+                  setMenuOpen(false)
+                  runSync(true)
+                }}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px' }}
+              >
+                Download all for offline
               </button>
               <button
                 type="button"
