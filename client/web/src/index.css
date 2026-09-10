@@ -1,0 +1,98 @@
+/*
+  Light, Picasa-adjacent theme - see docs/decisions/ui-visual-design.md.
+  A small set of named custom properties, not a full design-token system:
+  override these to reskin the app without touching component code.
+*/
+:root {
+  --bg: #fafafa;
+  --surface: #ffffff;
+  --surface-hover: #f0f0f0;
+  --border: #e2e2e2;
+  --text: #2a2a2a;
+  --text-muted: #767676;
+  --accent: #d4a017; /* warm gold, matches the existing ★ favorite color */
+  --accent-contrast: #ffffff;
+  --danger: #c0392b;
+  --scrubber-track: #d0d0d0;
+  --scrubber-indicator: #af3029; /* Flexoki red (light) */
+  --radius: 8px;
+  --sidebar-width: 220px;
+
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+}
+
+button {
+  font-family: inherit;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  padding: 6px 12px;
+}
+
+button:hover {
+  background: var(--surface-hover);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+input {
+  font-family: inherit;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  padding: 6px 10px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* Un-favorited thumbnails only show the favorite toggle on hover - the
+   gold border (Timeline.tsx) is the primary always-visible signal for
+   already-favorited photos, so the button itself doesn't need to compete
+   for attention on every tile at all times. */
+.favorite-toggle {
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+.favorite-toggle:hover,
+div:hover > .favorite-toggle {
+  opacity: 1;
+}
+/* An already-favorited photo keeps its star visible without hovering -
+   it's the state indicator, not just a control. */
+.favorite-toggle[aria-label='Unfavorite'] {
+  opacity: 1;
+}
+
+/* Status bar's activity dot. Inline styles can't declare keyframes. */
+@keyframes lesphotos-pulse {
+  0%, 100% { opacity: 0.25; }
+  50%      { opacity: 1; }
+}

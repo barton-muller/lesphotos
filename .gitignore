@@ -1,0 +1,33 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Generated fake library and PhotoView state
+server/data/photos/
+server/data/photoview/
+
+# Client-side sync cache (stands in for on-device storage)
+client/cache/
+
+# appdb is real local state (favorites/moment labels), not source -
+# regenerates from PhotoView via import_favorites_from_photoview() if lost
+server/data/appdb.sqlite3
+
+# client web build output / local deps
+client/web/node_modules/
+client/web/dist/
+
+sandbox/
+server/data/cache/
+server/data/appdb.sqlite3-shm
+server/data/appdb.sqlite3-wal
+
+# Real deployment secrets (LESPHOTOS_SECRET). The .example is committed.
+deploy/lesphotos.env
