@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { loadThumbnailUrl, peekThumbnailUrl } from './thumbnails'
+import { loadThumbnailUrl, peekThumbnailUrl, releaseThumbnail, retainThumbnail } from './thumbnails'
 
 /**
  * The thumbnail URL for one photo, or null while it loads.
@@ -16,6 +16,15 @@ import { loadThumbnailUrl, peekThumbnailUrl } from './thumbnails'
 export function useThumbnail(id: string): string | null {
   const [, setLoaded] = useState(0)
   const resident = peekThumbnailUrl(id)
+
+  // Retain for as long as this tile is showing THIS photo, keyed on id
+  // alone. Keying on `resident` too would release and re-retain every time
+  // the URL resolves, dropping the count to zero while the tile is still
+  // mounted - which aborts the very fetch it is waiting for.
+  useEffect(() => {
+    retainThumbnail(id)
+    return () => releaseThumbnail(id)
+  }, [id])
 
   useEffect(() => {
     if (resident) return

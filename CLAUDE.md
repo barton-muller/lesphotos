@@ -128,6 +128,14 @@ consistent history of otherwise-correct-looking code failing at real library siz
   in-flight full-res fetch was cancelled repeatedly and the viewer showed the thumbnail
   forever. Key on `photo.id`. Related: don't revoke an object URL in the same effect's
   cleanup — revoke it when its replacement is ready.
+- **Prefetch must never hit the network.** It fires on every scroll position change over a
+  runway of ~72 tiles either side — right for cheap IndexedDB reads, catastrophic once
+  `loadThumbnailUrl` could fetch: a fling requested all 2,298 photos of a 2,298-photo
+  library. `prefetchThumbnails` passes `allowNetwork: false`; only a mounted tile fetches.
+- **`useThumbnail`'s retain/release must key on `id` alone.** Keyed on `[id, resident]` it
+  releases and re-retains every time the URL resolves, so the count hits zero while the
+  tile is still mounted and aborts the fetch it is waiting for — the symptom was one tile
+  rendering out of thirty.
 - **`thumbnailBlob` is optional.** A sync stores metadata only by default and the grid
   fetches each thumbnail as its tile scrolls into view, so a new device is usable at once
   instead of after a full-library download. "Download all for offline" is the explicit

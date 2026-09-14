@@ -89,6 +89,20 @@ interface Entry {
 
 const entries = new Map<string, Entry>()
 const inflight = new Map<string, Promise<string | null>>()
+
+/**
+ * Abort handles for network fetches, and how many mounted tiles still want
+ * each one.
+ *
+ * Flinging through a large library mounts and unmounts thousands of tiles.
+ * Without this, every one of them leaves a request in flight that nobody is
+ * waiting for any more - measured on a 2,298-photo library: a fast scroll
+ * issued 519 requests during the fling and kept going until all 2,298 had
+ * been fetched, long after the tiles were gone. Cancelling on the last
+ * release keeps the traffic proportional to what is actually on screen.
+ */
+const fetchControllers = new Map<string, AbortController>()
+const waiters = new Map<string, number>()
 let seqCounter = 0
 
 /**
@@ -146,16 +160,53 @@ export function peekThumbnailUrl(id: string): string | null {
  * request, made one tile at a time instead of all at once.
  */
 async function fetchThumbnailBlob(id: string): Promise<Blob | null> {
+  const controller = new AbortController()
+  fetchControllers.set(id, controller)
   try {
-    const resp = await fetch(thumbUrl(id), { credentials: 'include' })
+    const resp = await fetch(thumbUrl(id), {
+      credentials: 'include',
+      signal: controller.signal,
+    })
     return resp.ok ? await resp.blob() : null
   } catch {
+    // Includes the AbortError from releaseThumbnail. Returning null marks
+    // the id missing for MISSING_TTL_MS (2s), so a tile scrolled back to
+    // simply asks again.
     return null
+  } finally {
+    fetchControllers.delete(id)
   }
 }
 
 
-export function loadThumbnailUrl(id: string): Promise<string | null> {
+/**
+ * Note that a mounted tile wants this photo. Pair every call with
+ * releaseThumbnail.
+ */
+export function retainThumbnail(id: string) {
+  waiters.set(id, (waiters.get(id) ?? 0) + 1)
+}
+
+
+/**
+ * The tile is gone. When nothing else wants the photo, abort any fetch
+ * still running for it.
+ */
+export function releaseThumbnail(id: string) {
+  const n = (waiters.get(id) ?? 0) - 1
+  if (n > 0) {
+    waiters.set(id, n)
+    return
+  }
+  waiters.delete(id)
+  fetchControllers.get(id)?.abort()
+}
+
+
+export function loadThumbnailUrl(
+  id: string,
+  { allowNetwork = true }: { allowNetwork?: boolean } = {},
+): Promise<string | null> {
   const existing = peekThumbnailUrl(id)
   if (existing) return Promise.resolve(existing)
   if (isMissing(id)) return Promise.resolve(null)
@@ -175,6 +226,12 @@ export function loadThumbnailUrl(id: string): Promise<string | null> {
         // 2s, so a tile that failed simply retries the next time it is
         // scrolled past. Most of the time the library is fully synced and
         // this path never runs at all.
+        if (!allowNetwork) {
+          // Prefetch warms from IndexedDB only. Not marked missing: the
+          // tile itself will ask for real when it mounts, and recording a
+          // miss here would suppress that for MISSING_TTL_MS.
+          return null
+        }
         const blob = await fetchThumbnailBlob(id)
         if (!blob) {
           missing.set(id, Date.now())
@@ -237,7 +294,12 @@ export function invalidateThumbnail(id: string) {
 export function prefetchThumbnails(ids: string[]) {
   for (const id of ids) {
     if (entries.has(id) || inflight.has(id) || isMissing(id)) continue
-    void loadThumbnailUrl(id)
+    // Local reads only. This fires on every scroll position change over a
+    // runway of ~72 tiles either side, which is right for cheap IndexedDB
+    // reads but would put the whole library on the wire during a fling -
+    // measured: all 2,298 photos requested while flinging through a
+    // 2,298-photo library. Tiles that actually mount do the fetching.
+    void loadThumbnailUrl(id, { allowNetwork: false })
   }
 }
 
