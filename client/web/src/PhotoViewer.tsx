@@ -227,7 +227,15 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
         />
       ) : (
         <div
-          style={{ position: 'relative', display: 'flex', maxWidth: '100%', maxHeight: '100%' }}
+          style={{
+            position: 'relative',
+            display: 'flex',
+            // Fixed to the full viewport (not shrink-wrapped to the child
+            // <img>'s intrinsic size) so the img's own width/height: 100%
+            // below has something stable to fill - see the img's comment.
+            width: '100vw',
+            height: '100vh',
+          }}
           // Press-and-hold plays for as long as the press lasts. Pointer
           // events rather than touch/mouse pairs so one handler covers
           // finger, pen and mouse. onPointerLeave/Cancel matter: a finger
@@ -260,6 +268,15 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
           data-testid="viewer-image"
           data-loaded={fullResUrl ? 'fullres' : 'thumbnail'}
           style={{
+            // Explicit width/height, not just max-width/max-height: without
+            // these the box sizes to the <img>'s intrinsic pixel dimensions,
+            // which are tiny for the thumbnail and huge for the full-res
+            // photo - so swapping src from one to the other visibly grew the
+            // image on screen. Forcing both sources into the same
+            // fit-to-screen box makes the full-res swap a pure sharpen in
+            // place.
+            width: '100%',
+            height: '100%',
             maxWidth: '100%',
             maxHeight: '100%',
             objectFit: 'contain',
