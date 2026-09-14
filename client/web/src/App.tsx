@@ -80,6 +80,16 @@ function App() {
   // settable synchronously, before any re-render, or two calls in the
   // same tick would both get through.
   const syncing = useRef(false)
+  // When the last sync finished, so a burst of visibility/focus events -
+  // mobile Safari fires both for one real foreground transition, and
+  // sometimes fires focus again on its own shortly after (address bar
+  // showing/hiding, a click stealing and returning focus) - collapses into
+  // one sync instead of a fresh one each time. syncing.current alone only
+  // stops two calls overlapping; it does nothing once the first has
+  // finished, which is what made "keeps re-triggering after it completes"
+  // possible even though no two syncs ever ran concurrently.
+  const lastSyncedAt = useRef(0)
+  const MIN_RESYNC_INTERVAL_MS = 5000
   // Separate from syncStatus: downloading every thumbnail can run at the
   // same time nothing else is happening, and needs its own progress line
   // rather than fighting metadata sync for the same status text.
@@ -92,6 +102,7 @@ function App() {
   // are runDownloadAll's job, triggered explicitly, never implicitly here.
   async function runSync() {
     if (syncing.current) return
+    if (Date.now() - lastSyncedAt.current < MIN_RESYNC_INTERVAL_MS) return
     syncing.current = true
     setSyncStatus('syncing')
     try {
@@ -119,6 +130,7 @@ function App() {
       setSyncMessage(message)
     } finally {
       syncing.current = false
+      lastSyncedAt.current = Date.now()
     }
   }
 
