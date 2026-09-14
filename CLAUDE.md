@@ -128,6 +128,17 @@ consistent history of otherwise-correct-looking code failing at real library siz
   in-flight full-res fetch was cancelled repeatedly and the viewer showed the thumbnail
   forever. Key on `photo.id`. Related: don't revoke an object URL in the same effect's
   cleanup — revoke it when its replacement is ready.
+- **Metadata sync must write incrementally, per server page, never buffer the whole
+  library then write once.** Buffering meant the status bar and the grid both stayed blank
+  for the full sync duration (30-60s+ on a few thousand photos), and thumbnails for early
+  years never got a chance to start loading until the write pass reached them - visible as
+  bands of grey tiles unrelated to what was on screen. `syncTimeline` writes each page as
+  it lands; `downloadAllThumbnails` is thumbnail PIXELS as a separate, explicit action.
+- **A bulk operation over IndexedDB rows should be resumable by re-querying "what's still
+  missing", not by tracking progress state.** `downloadAllThumbnails` re-derives its work
+  list (`rows without a blob`) on every call, so a tab closed or reloaded mid-download loses
+  nothing - the next run picks up exactly where it stopped. Verified: interrupted at 1,953
+  of 2,298, re-invoked, completed to 2,298 with no duplication.
 - **Prefetch must never hit the network.** It fires on every scroll position change over a
   runway of ~72 tiles either side — right for cheap IndexedDB reads, catastrophic once
   `loadThumbnailUrl` could fetch: a fling requested all 2,298 photos of a 2,298-photo

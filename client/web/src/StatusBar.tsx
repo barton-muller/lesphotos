@@ -4,10 +4,17 @@ export type SyncState = 'idle' | 'syncing' | 'done' | 'error'
  * Persistent bottom bar saying what the app is doing.
  *
  * Replaces the sidebar's sync text, which vanished with the left panel. A
- * fixed strip is the right home for it: sync now runs on its own (on login and
- * on regaining focus), so the user never triggers it and needs somewhere
- * consistent to look rather than a message that appears next to a button they
- * did not press.
+ * fixed strip is the right home for it: sync now runs on its own (on login
+ * and on regaining focus), so the user never triggers it and needs somewhere
+ * consistent to look rather than a message that appears next to a button
+ * they did not press.
+ *
+ * Always shows the metadata/thumbnail counts, not just while something is
+ * active: distinguishing "the grid is complete but thumbnails are still
+ * arriving as I scroll" from "the whole library isn't here yet" was
+ * previously only guessable from watching the grid itself, made worse by
+ * metadata sync writing nothing to IndexedDB until the whole library had
+ * been fetched - the counts stayed blank for the entire wait.
  *
  * Stays mounted at all times so the bar never changes the page's height as
  * messages come and go.
@@ -16,26 +23,47 @@ export function StatusBar({
   syncStatus,
   syncMessage,
   photoCount,
+  thumbnailCount,
+  downloadingThumbs,
+  thumbDownloadMessage,
   offline,
 }: {
   syncStatus: SyncState
   syncMessage: string
   photoCount: number | null
+  // Rows that have a thumbnailBlob - i.e. actually browsable offline right
+  // now, as opposed to just known about. null while the count itself is
+  // loading, same convention as photoCount.
+  thumbnailCount: number | null
+  downloadingThumbs: boolean
+  thumbDownloadMessage: string
   // Set when the server can't be reached but the session was kept. The
   // grid still works from IndexedDB, so this is a state to explain, not an
   // error to shout about - "Sync failed: Failed to fetch" reads like the
   // app is broken when the NAS is merely asleep.
   offline?: boolean
 }) {
-  const count = photoCount !== null ? `${photoCount.toLocaleString()} photos` : ''
-  const text =
+  const counts =
+    photoCount === null
+      ? ''
+      : `${photoCount.toLocaleString()} photos, ${(thumbnailCount ?? 0).toLocaleString()} thumbs`
+
+  const activity =
     syncStatus === 'syncing'
-      ? `Syncing… ${syncMessage}`
-      : offline
-        ? `Offline - showing ${count || 'cached photos'}`
-        : syncStatus === 'error'
-          ? `Sync failed: ${syncMessage}`
-          : count
+      ? `Loading metadata… ${syncMessage}`
+      : downloadingThumbs
+        ? `Downloading thumbnails… ${thumbDownloadMessage}`
+        : offline
+          ? 'Offline'
+          : syncStatus === 'error'
+            ? `Sync failed: ${syncMessage}`
+            : thumbDownloadMessage
+              ? thumbDownloadMessage
+              : ''
+
+  const text = activity ? `${activity}${counts ? ` — ${counts}` : ''}` : counts
+
+  const active = syncStatus === 'syncing' || downloadingThumbs
 
   return (
     <div
@@ -57,7 +85,7 @@ export function StatusBar({
         textOverflow: 'ellipsis',
       }}
     >
-      {syncStatus === 'syncing' && (
+      {active && (
         <span
           data-testid="sync-spinner"
           style={{

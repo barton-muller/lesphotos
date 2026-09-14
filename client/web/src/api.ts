@@ -117,6 +117,21 @@ export interface TimelineEntry {
 // back shorter than requested.
 export async function fetchMediaTimeline(pageSize = 500): Promise<TimelineEntry[]> {
   const all: TimelineEntry[] = []
+  await fetchMediaTimelinePaged((page) => {
+    all.push(...page)
+  }, pageSize)
+  return all
+}
+
+// Same request loop as fetchMediaTimeline, but hands each page to the
+// caller as it arrives instead of buffering the whole library. On a
+// library of a few thousand photos that is the difference between the
+// grid staying blank for 30-60s (all pages, then one big write) and rows
+// appearing every ~100ms as pages land - see sync.ts.
+export async function fetchMediaTimelinePaged(
+  onPage: (page: TimelineEntry[]) => void | Promise<void>,
+  pageSize = 500,
+): Promise<void> {
   let offset = 0
   for (;;) {
     // no-store for the same reason /photo-ids needs it: this changes on
@@ -128,11 +143,10 @@ export async function fetchMediaTimeline(pageSize = 500): Promise<TimelineEntry[
     })
     if (!resp.ok) throw new Error(`timeline failed (${resp.status})`)
     const page: TimelineEntry[] = await resp.json()
-    all.push(...page)
+    await onPage(page)
     if (page.length < pageSize) break
     offset += pageSize
   }
-  return all
 }
 
 // Derivatives are immutable per photo_id and served with a long max-age, so

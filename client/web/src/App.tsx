@@ -6,7 +6,7 @@ import { StatusBar } from './StatusBar'
 import { useIsNarrow } from './useIsNarrow'
 import { checkSession, login, logout } from './api'
 import { db } from './db'
-import { syncTimeline } from './sync'
+import { downloadAllThumbnails, syncTimeline } from './sync'
 
 // Single-column shell: a thin top bar, the grid, and a status bar. The left
 // panel is gone entirely - on a phone it cost more than half the width, and
@@ -80,16 +80,22 @@ function App() {
   // settable synchronously, before any re-render, or two calls in the
   // same tick would both get through.
   const syncing = useRef(false)
+  // Separate from syncStatus: downloading every thumbnail can run at the
+  // same time nothing else is happening, and needs its own progress line
+  // rather than fighting metadata sync for the same status text.
+  const [downloadingThumbs, setDownloadingThumbs] = useState(false)
+  const [thumbDownloadMessage, setThumbDownloadMessage] = useState('')
 
-  async function runSync(thumbnails = false) {
+  // Metadata only, always - this is what makes login fast regardless of
+  // library size (JSON, never image bytes) and what makes the grid appear
+  // incrementally rather than after every page has landed. Thumbnail PIXELS
+  // are runDownloadAll's job, triggered explicitly, never implicitly here.
+  async function runSync() {
     if (syncing.current) return
     syncing.current = true
     setSyncStatus('syncing')
     try {
-      const result = await syncTimeline(
-        (done, total) => setSyncMessage(`${done}/${total}`),
-        { thumbnails },
-      )
+      const result = await syncTimeline((done) => setSyncMessage(`${done} loaded`))
       setServerUnreachable('')
       setSyncStatus('done')
       setSyncMessage(
@@ -113,6 +119,34 @@ function App() {
       setSyncMessage(message)
     } finally {
       syncing.current = false
+    }
+  }
+
+  // "Download all for offline": the one place thumbnail PIXELS are fetched
+  // in bulk. Independent of syncing.current - metadata sync and a bulk
+  // thumbnail download are different operations and either should be able
+  // to run while the other is idle - but its own flag stops two downloads
+  // overlapping the same way.
+  const downloadingRef = useRef(false)
+  async function runDownloadAll() {
+    if (downloadingRef.current) return
+    downloadingRef.current = true
+    setDownloadingThumbs(true)
+    setThumbDownloadMessage('')
+    try {
+      const result = await downloadAllThumbnails((done, total) =>
+        setThumbDownloadMessage(`${done}/${total} thumbnails`),
+      )
+      setThumbDownloadMessage(
+        result.failed
+          ? `${result.downloaded} downloaded, ${result.failed} failed`
+          : `${result.downloaded} downloaded`,
+      )
+    } catch (err) {
+      setThumbDownloadMessage(err instanceof Error ? err.message : String(err))
+    } finally {
+      downloadingRef.current = false
+      setDownloadingThumbs(false)
     }
   }
 
@@ -205,6 +239,14 @@ function App() {
   }, [loggedIn])
 
   const photoCount = useLiveQuery(() => db.photos.count(), [], null)
+  // Live-queried the same way: a bulk download or a lazily-fetched tile
+  // both write to db.photos, and this is what lets the status bar count up
+  // in real time without either code path having to know the bar exists.
+  const thumbnailCount = useLiveQuery(
+    () => db.photos.filter((p) => p.thumbnailBlob !== undefined).count(),
+    [],
+    null,
+  )
   // Still needed by Timeline: the scrubber rail collapses to a touch handle
   // on a phone even though the sidebar it used to share space with is gone.
   const narrow = useIsNarrow()
@@ -391,14 +433,21 @@ function App() {
               <button
                 type="button"
                 data-testid="sync-all"
+                disabled={downloadingThumbs}
                 title="Download every thumbnail so the whole library works offline"
                 onClick={() => {
                   setMenuOpen(false)
-                  runSync(true)
+                  runDownloadAll()
                 }}
-                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px' }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '8px',
+                  opacity: downloadingThumbs ? 0.6 : 1,
+                }}
               >
-                Download all for offline
+                {downloadingThumbs ? 'Downloading…' : 'Download all for offline'}
               </button>
               <button
                 type="button"
@@ -430,6 +479,9 @@ function App() {
         syncStatus={syncStatus}
         syncMessage={syncMessage}
         photoCount={photoCount}
+        thumbnailCount={thumbnailCount}
+        downloadingThumbs={downloadingThumbs}
+        thumbDownloadMessage={thumbDownloadMessage}
         offline={serverUnreachable !== ''}
       />
     </div>
