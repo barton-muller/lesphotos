@@ -1,4 +1,4 @@
-import { fetchMediaTimelinePaged, thumbUrl, type TimelineEntry } from './api'
+import { fetchMediaTimelinePaged, fetchTimelineCount, thumbUrl, type TimelineEntry } from './api'
 import { db } from './db'
 import { formatBytes, hasRoomFor, requestPersistentStorage } from './storage'
 import { invalidateThumbnail } from './thumbnails'
@@ -10,6 +10,28 @@ import { invalidateThumbnail } from './thumbnails'
 const APPROX_THUMB_BYTES = 20 * 1024
 
 export class QuotaError extends Error {}
+
+// Last count seen from /timeline/count, persisted so the skip works from
+// a cold page load too, not just within one session.
+const LAST_COUNT_KEY = 'lesphotos-last-timeline-count'
+
+function readLastCount(): number | null {
+  try {
+    const v = localStorage.getItem(LAST_COUNT_KEY)
+    return v === null ? null : Number(v)
+  } catch {
+    return null
+  }
+}
+
+function writeLastCount(n: number) {
+  try {
+    localStorage.setItem(LAST_COUNT_KEY, String(n))
+  } catch {
+    // Loses the skip optimisation only, never correctness - the next sync
+    // just does a full relist as if this were the first one.
+  }
+}
 
 export interface SyncResult {
   added: number
@@ -41,6 +63,24 @@ export async function syncTimeline(
   // always refuses on iOS) and changes nothing about how sync proceeds - the
   // cache just stays eviction-eligible, as it was before this call existed.
   void requestPersistentStorage()
+
+  // Cheap check first: a full relist is a real cost (~700KB / one request
+  // per 500 photos - measured 10s over Tailscale at 4,000 photos), and
+  // most syncs - the foreground-refresh ones especially - find nothing
+  // changed. Skips the relist when the count matches; does NOT catch a
+  // favorite toggle or rename with no count change (those still show up
+  // on the next add/delete, or via "Sync now"). A locally-cached count
+  // that predates any photos existing (0) never short-circuits the very
+  // first sync, since a fresh device also has nothing in IndexedDB to skip
+  // to - the emptiness would be self-inconsistent, not just stale.
+  const lastCount = readLastCount()
+  const cachedCount = await db.photos.count()
+  if (lastCount !== null && cachedCount > 0) {
+    const remoteCount = await fetchTimelineCount()
+    if (remoteCount === lastCount && remoteCount === cachedCount) {
+      return { added: 0, updated: 0, removed: 0, total: remoteCount }
+    }
+  }
 
   // Cached rows, not just their keys: photo_id is stable across moves by
   // design, so "already cached" does NOT imply "unchanged". A renamed
@@ -116,6 +156,7 @@ export async function syncTimeline(
   const removedIds = [...cachedById.keys()].filter((id) => !remoteIds.has(id))
   if (removedIds.length) await db.photos.bulkDelete(removedIds)
 
+  writeLastCount(remoteIds.size)
   return { added, updated, removed: removedIds.length, total: remoteIds.size }
 }
 

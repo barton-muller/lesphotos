@@ -116,6 +116,19 @@ export interface TimelineEntry {
 // serialisation held in RAM on a 1GB box. Same loop shape the PhotoView
 // client used, so this is not a new pattern - keep going until a page comes
 // back shorter than requested.
+// Paired with fetchMediaTimelinePaged: a full relist is one request per
+// 500 photos (~700KB / 5 round-trips at 2,298 photos - measured 10s over
+// Tailscale at 4,000), so sync.ts checks this single cheap number first
+// and skips the relist entirely when it matches what was seen last time.
+export async function fetchTimelineCount(): Promise<number> {
+  const resp = await fetch(`${API_BASE}/timeline/count`, {
+    credentials: 'include',
+    cache: 'no-store',
+  })
+  if (!resp.ok) throw new Error(`timeline count failed (${resp.status})`)
+  return (await resp.json()).count
+}
+
 export async function fetchMediaTimeline(pageSize = 500): Promise<TimelineEntry[]> {
   const all: TimelineEntry[] = []
   await fetchMediaTimelinePaged((page) => {

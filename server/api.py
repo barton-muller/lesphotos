@@ -331,6 +331,28 @@ def _moment_of(library: config.Library, path: str) -> tuple[str, str]:
     return parent.name, str(rel)
 
 
+@app.get("/timeline/count")
+def timeline_count(sess: Session = Depends(current)):
+    """
+    How many photos are visible in the timeline, cheaply.
+
+    Lets the client skip a full relist (paginated /timeline, ~700KB /
+    5 sequential round-trips at 2,298 photos - measured at 10s over
+    Tailscale on 4,000) on every foreground refresh when nothing has
+    changed. Deliberately just a count, not a general change-detection
+    signal: it catches additions and deletions, which is the common case,
+    but NOT a favorite toggle or rename with no count change. Accepted
+    trade-off - those are rare and "Sync now" covers them - rather than
+    adding a real updated_at column touched by every write path.
+    """
+    conn = db.connect(sess.library)
+    n = conn.execute(
+        "SELECT COUNT(*) c FROM media WHERE derived = 1 AND is_motion_clip = 0"
+    ).fetchone()["c"]
+    conn.close()
+    return {"count": n}
+
+
 @app.get("/timeline")
 def timeline(
     response: Response,

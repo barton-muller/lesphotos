@@ -128,6 +128,9 @@ consistent history of otherwise-correct-looking code failing at real library siz
   in-flight full-res fetch was cancelled repeatedly and the viewer showed the thumbnail
   forever. Key on `photo.id`. Related: don't revoke an object URL in the same effect's
   cleanup — revoke it when its replacement is ready.
+- **`/timeline/count` must use the exact same WHERE as `/timeline`** (`derived = 1 AND
+  is_motion_clip = 0`). The client trusts a count match to skip a full relist entirely, so a
+  mismatched filter would either force needless relists or, worse, wrongly skip one.
 - **Metadata sync must write incrementally, per server page, never buffer the whole
   library then write once.** Buffering meant the status bar and the grid both stayed blank
   for the full sync duration (30-60s+ on a few thousand photos), and thumbnails for early
