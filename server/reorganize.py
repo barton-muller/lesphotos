@@ -93,6 +93,20 @@ def _register_photo(conn, path):
     return content_hash
 
 
+def _iter_moment_files(moment_path):
+    """
+    A moment folder's real contents, skipping host bookkeeping like
+    Synology's @eaDir thumbnail cache (a directory, not a photo) - the same
+    filter auto_generate_moments applies to iter_media_files candidates.
+    Plain iterdir() here crashed content_hash_of with IsADirectoryError the
+    first time a rename/merge touched a moment old enough to have one.
+    """
+    return [
+        f for f in moment_path.iterdir()
+        if f.is_file() and f.name not in platform_hosts.IGNORED_DIRNAMES
+    ]
+
+
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".heic"}
 # Auto-grouping has to consider videos as well, or a standalone clip is
 # left behind in the source tree while every photo around it moves - the
@@ -468,7 +482,7 @@ def rename_moment(library, moment_path, new_label, new_date=None):
     new_year_dir.mkdir(parents=True, exist_ok=True)
 
     conn = db.connect(library)
-    files_before = list(moment_path.iterdir())
+    files_before = _iter_moment_files(moment_path)
     for f in files_before:
         db.upsert_photo(conn, db.content_hash_of(f), f, favorite=None)
 
@@ -536,13 +550,17 @@ def merge_moments(library, moment_paths, new_label):
     conn = db.connect(library)
     moved_paths = []
     for src_moment in moment_paths:
-        for f in list(src_moment.iterdir()):
+        for f in _iter_moment_files(src_moment):
             db.upsert_photo(conn, db.content_hash_of(f), f, favorite=None)
             dest_file = dest / f.name
             shutil.move(str(f), str(dest_file))
             _register_photo(conn, dest_file)
             moved_paths.append(dest_file)
-        src_moment.rmdir()
+        # Host bookkeeping (e.g. Synology's @eaDir) left behind by the
+        # filtered iteration above would make a plain rmdir() fail on a
+        # non-empty directory - shutil.rmtree tolerates it the same way
+        # DSM itself regenerates the cache for the surviving files.
+        shutil.rmtree(src_moment, ignore_errors=True)
 
     moment_id = str(uuid.uuid4())
     db.upsert_moment(conn, moment_id, dest, dest.name)
