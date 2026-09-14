@@ -59,10 +59,11 @@ export function setFavorite(photoviewPath: string, favorite: boolean) {
   return post<{ ok: true }>('/favorite', { path: toApiPath(photoviewPath), favorite })
 }
 
-export function renameMoment(momentPhotoviewPath: string, newLabel: string) {
+export function renameMoment(momentPhotoviewPath: string, newLabel: string, newDate?: string) {
   return post<{ ok: true; new_path: string }>('/moments/rename', {
     moment_path: toApiPath(momentPhotoviewPath),
     new_label: newLabel,
+    new_date: newDate ?? null,
   })
 }
 

@@ -433,21 +433,39 @@ def _reindex_moved(conn, moved_paths):
     conn.commit()
     _repair_motion_paths(conn, moved_paths)
 
-def rename_moment(library, moment_path, new_label):
+def rename_moment(library, moment_path, new_label, new_date=None):
     """
-    Cosmetic rename: same date, same contents, just a new folder name -
-    e.g. "2024-03-10-moment" -> "2024-03-10-LeedsWithDad". A new_label with
-    no date prefix of its own inherits the existing one (see
-    _with_date_prefix) rather than producing a prefix-less folder.
+    Rename a moment's label and, optionally, its date - e.g.
+    "2024-03-10-moment" -> "2024-03-10-LeedsWithDad", or with new_date="2024-07-04"
+    -> "2024-07-04-LeedsWithDad". A new_label with no date prefix of its own
+    inherits the moment's current one (see _with_date_prefix) unless new_date
+    is given, in which case that becomes the prefix instead.
 
+    A date change can move the moment into a different year: moments are
+    filed under <library root>/<year>/ (see auto_generate_moments), and
+    nothing else re-derives that directory from the folder's own name, so
+    a changed year is relocated here rather than left stranded under its
+    old year folder.
     """
     moment_path = Path(moment_path)
-    new_path = moment_path.parent / _with_date_prefix(moment_path.name, new_label)
+    if new_date is not None:
+        try:
+            datetime.strptime(new_date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"new_date must be YYYY-MM-DD, got {new_date!r}")
+        new_name = f"{new_date}-{new_label}" if new_label else new_date
+        new_year_dir = moment_path.parent.parent / new_date[:4]
+    else:
+        new_name = _with_date_prefix(moment_path.name, new_label)
+        new_year_dir = moment_path.parent
+    new_path = new_year_dir / new_name
 
     if not moment_path.is_dir():
         raise FileNotFoundError(f"moment folder no longer exists: {moment_path}")
     if new_path.exists():
         raise FileExistsError(f"a moment already exists at the new name: {new_path}")
+
+    new_year_dir.mkdir(parents=True, exist_ok=True)
 
     conn = db.connect(library)
     files_before = list(moment_path.iterdir())
@@ -455,6 +473,15 @@ def rename_moment(library, moment_path, new_label):
         db.upsert_photo(conn, db.content_hash_of(f), f, favorite=None)
 
     moment_path.rename(new_path)
+
+    # A date change that crosses a year boundary can leave the old year
+    # folder empty - prune it, matching auto_generate_moments' own cleanup
+    # of emptied source folders. rmdir only succeeds when genuinely empty.
+    if moment_path.parent != new_year_dir:
+        try:
+            moment_path.parent.rmdir()
+        except OSError:
+            pass
 
     # A folder rename moves both halves of every pair inside it together,
     # so pairing survives - but motion_path is absolute and now points at

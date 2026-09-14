@@ -126,6 +126,7 @@ def favorite(req: FavoriteRequest, sess: Session = Depends(current)):
 class RenameMomentRequest(BaseModel):
     moment_path: str
     new_label: str
+    new_date: str | None = None
 
 
 def _run_reorganize(fn, *args, **kwargs):
@@ -134,19 +135,23 @@ def _run_reorganize(fn, *args, **kwargs):
     filesystem drift (the caller's cached photo/moment list vs. the real
     disk state) - confirmed in practice, not hypothetical: an unguarded
     move crashed with an uncaught FileNotFoundError and an opaque 500.
-    Surfaces a clear 409 instead.
+    Surfaces a clear 409 instead. A bad new_date is the caller's mistake,
+    not drift, so it gets its own clean 400 rather than falling through to
+    an opaque 500.
     """
     try:
         return fn(*args, **kwargs)
     except (FileNotFoundError, FileExistsError) as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/moments/rename")
 def rename_moment(req: RenameMomentRequest, sess: Session = Depends(current)):
     host_path = _resolve_host_path(sess.library, req.moment_path)
     new_path = _run_reorganize(
-        reorganize.rename_moment, sess.library, host_path, req.new_label
+        reorganize.rename_moment, sess.library, host_path, req.new_label, req.new_date
     )
     return {"ok": True, "new_path": str(new_path.relative_to(sess.library.photos_root))}
 

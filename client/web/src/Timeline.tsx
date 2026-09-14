@@ -434,15 +434,44 @@ function MomentHeader({
   mergeSelected: boolean
   onToggleMergeSelect: () => void
 }) {
+  // "2025-03-15-spain-holiday" -> date "2025-03-15", label "spain-holiday".
+  // A folder without a recognisable date prefix (shouldn't happen given
+  // _with_date_prefix server-side, but the client shouldn't crash on one)
+  // edits as a label-only moment, same as before this split existed.
+  const dateMatch = /^(\d{4}-\d{2}-\d{2})(?:-(.*))?$/.exec(moment)
+  const initialDate = dateMatch ? dateMatch[1] : ''
+  const initialLabel = dateMatch ? (dateMatch[2] ?? '') : moment
+
   const [editing, setEditing] = useState(false)
-  const [label, setLabel] = useState(moment)
+  const [date, setDate] = useState(initialDate)
+  const [label, setLabel] = useState(initialLabel)
   const [status, setStatus] = useState('')
+
+  // Folder names are the storage format (CLAUDE.md: moments are
+  // "YYYY-MM-DD-Label" directories) - a label typed with spaces or
+  // punctuation would otherwise produce a bad folder name, so mistakes are
+  // normalized rather than rejected: lowercase, spaces/underscores become
+  // hyphens, anything else not safe in a folder name is dropped, and
+  // repeated/edge hyphens are collapsed.
+  function sanitizeLabel(raw: string): string {
+    return raw
+      .trim()
+      .toLowerCase()
+      .replace(/[\s_]+/g, '-')
+      .replace(/[^a-z0-9-]/g, '')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setStatus('Date must be YYYY-MM-DD')
+      return
+    }
     setStatus('Renaming…')
     try {
-      await renameMoment(momentPath, label)
+      await renameMoment(momentPath, sanitizeLabel(label), date)
       setStatus('Renamed')
       setEditing(false)
       // PhotoView identifies media by MD5(path) (see CLAUDE.md invariant
@@ -475,6 +504,12 @@ function MomentHeader({
   if (editing && !mergeMode) {
     return (
       <form onSubmit={submit} style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '8px 0 4px' }}>
+        <input
+          data-testid="rename-date-input"
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+        />
         <input data-testid="rename-input" value={label} onChange={(e) => setLabel(e.target.value)} />
         <button type="submit">Save</button>
         <button type="button" onClick={() => setEditing(false)}>
@@ -689,6 +724,37 @@ export function Timeline({
   )
 
   const fractionalRow = rowAtOffset(virtualizer.scrollOffset ?? 0)
+
+  // Survive a browser refresh at the same scroll position instead of
+  // dumping the user back at the top (today's photos). Row index, not raw
+  // pixel offset - row height depends on `columns`, which can differ
+  // between the save and the restore. sessionStorage rather than
+  // localStorage: this is "stay where I was this visit", not a permanent
+  // bookmark that should still apply after the app has been closed for a
+  // week and today's photos are what's actually relevant again.
+  const SCROLL_STORAGE_KEY = 'lesphotos-scroll-row'
+  const restoredRef = useRef(false)
+  useEffect(() => {
+    if (restoredRef.current) return
+    if (!scrollElement || rows.length === 0) return
+    restoredRef.current = true
+    const saved = sessionStorage.getItem(SCROLL_STORAGE_KEY)
+    if (!saved) return
+    const rowIndex = Number(saved)
+    if (!Number.isFinite(rowIndex) || rowIndex <= 0) return
+    virtualizer.scrollToIndex(Math.min(rowIndex, rows.length - 1), { align: 'start' })
+  }, [scrollElement, rows.length, virtualizer])
+
+  const fractionalRowRef = useRef(fractionalRow)
+  fractionalRowRef.current = fractionalRow
+  useEffect(() => {
+    if (!scrollElement) return
+    const onScroll = () => {
+      sessionStorage.setItem(SCROLL_STORAGE_KEY, String(Math.floor(fractionalRowRef.current)))
+    }
+    scrollElement.addEventListener('scroll', onScroll, { passive: true })
+    return () => scrollElement.removeEventListener('scroll', onScroll)
+  }, [scrollElement])
 
   // Size the thumbnail cache to what this grid can actually show at once.
   //
