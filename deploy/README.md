@@ -207,10 +207,18 @@ password, or read another library.
 to drop rows whose file is gone. Moving files by hand breaks the invariant that all
 moves go through the app (see CLAUDE.md).
 
-## Outstanding
+## Restarting / stopping
 
-- **Task Scheduler boot task** (step 7) is not set up yet. The server currently runs via
-  `nohup ./deploy/run.sh &`, which survives an SSH session closing but **not a reboot**.
-  `tailscale serve --bg` IS persistent across reboots, so after a restart the HTTPS front
-  end will return 502 with nothing behind it until the app is started by hand. Do this
-  before other people depend on the app.
+Task Scheduler starts the server at boot but has no stop button, so both restart and
+manual stop are done over SSH — see "Restarting the server on the NAS (NAS)" in
+CLAUDE.md for the exact commands. In short:
+
+```sh
+pkill -f "uvicorn api:root_app"
+UV=<absolute path from `which uv`> /bin/bash /volume1/lesphotos/app/deploy/run.sh \
+  >> /volume1/lesphotos/data/server.log 2>&1 &
+```
+
+The `UV=` override is required in the Task Scheduler command too — DSM's scheduler runs
+with no `$HOME` set, so `run.sh`'s own `$HOME/.local/bin/uv` default resolves to
+`/.local/bin/uv` and fails.

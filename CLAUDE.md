@@ -87,6 +87,17 @@ consistent history of otherwise-correct-looking code failing at real library siz
   file holds the host-shaped answer, so porting to another NAS means editing one file.
   Detection is by looking for the artifact, never by sniffing the platform — a library
   rsynced off a Synology keeps its posters and should still use them.
+- **Synology Photos indexes `.lesphotos/cache/` even though it's a dotfile.** Dot-hiding
+  (which is what keeps our own indexer from recursing into it, see `SIDECAR_DIRNAME` in
+  `config.py`) is a Unix convention that Synology's Photos app does not honor — it walked
+  the folder anyway and showed every thumbnail as a "photo" to end users. There is no
+  per-folder exclusion in the Synology Photos UI, and `synoindex -D <path>` (the fix for
+  the older PhotoStation package) had no effect — the Photos app apparently uses a
+  different indexing path. What worked: **Synology Photos → Settings → excluded file
+  extensions → add `webp`.** Cache derivatives are always exactly `thumb.webp` /
+  `preview.webp` (`_derive_one` in `indexer.py`), so this is a clean, low-collateral filter
+  — the only cost is that a library can no longer contain a real `.webp` *original* photo
+  without it also being hidden from Synology Photos, which in practice is a non-issue.
 - **Synology's ffmpeg has NO video decoders** — no hevc, no h264, and no `/dev/dri`
   (DS124, ffmpeg 4.1.9). Extracting a frame on the NAS is impossible, so video thumbnails
   come from DSM Image Assistant's own poster at
@@ -230,6 +241,56 @@ calls `/lesphotos-api/*`, so `api:app` alone gives 404s on every request.
 
 **Don't invent a new secret to get unblocked.** A fresh one invalidates every existing
 session, which looks like "login is broken" to anyone else using the machine.
+
+### Dev server ports
+
+**Local dev always uses backend `:8001` and Vite `:5173` — the defaults, not a spare
+port.** These are Claude's own instances, not anyone else's: the user keeps browser tabs
+open on them across sessions and expects `git pull` / a restart to be enough to see new
+work, not a fresh port to hunt for each time. Reuse them:
+
+- If something is already listening on 8001/5173, it is almost certainly a stale instance
+  from an earlier session — kill it and restart on the same port rather than picking a
+  different one.
+- Don't invent `LESPHOTOS_PORT=<random>` "to be safe". The one case for a second port is
+  running two working trees side by side on purpose (e.g. comparing a stash against
+  current) — pick an obvious throwaway port for that, and stop it before finishing up
+  rather than leaving it bound.
+
+### Restarting the server on the NAS (NAS)
+
+The server is started at boot by a DSM **Task Scheduler** triggered task (Control Panel →
+Task Scheduler, event Boot-up), but Task Scheduler has no "kill this task" button — the
+UI can re-run the start script but cannot stop a process it started. So in practice,
+restarting is done entirely from an SSH session, never by logging into the DSM web UI:
+
+```sh
+pkill -f "uvicorn api:root_app"
+
+UV=/var/services/homes/Alice/.local/bin/uv /bin/bash /volume1/lesphotos/app/deploy/run.sh \
+  >> /volume1/lesphotos/data/server.log 2>&1 &
+
+sleep 2 && curl -I http://localhost:8001    # confirm it came back up
+```
+
+Two things that aren't obvious from `deploy/run.sh` alone:
+
+- **`run.sh` looks for `uv` at `$HOME/.local/bin/uv`, but DSM Task Scheduler runs with no
+  `$HOME` set** (it's not a login shell) — the lookup silently becomes `/.local/bin/uv`
+  and fails with "uv not found." The fix is passing `UV=<absolute path to uv>` explicitly,
+  which is why it's in the command above rather than relying on `run.sh`'s own default.
+  Find the real path once with `which uv` over SSH (it's `/var/services/homes/<user>/...`,
+  not `/volume1/homes/<user>/...` — DSM's actual home path differs from the share path).
+- **The Task Scheduler "Run command" must match this exact command** (with `/bin/bash`
+  in front — Synology's own recommendation for scheduler scripts — and the same `UV=`
+  prefix), or the boot-time start will fail the same way. If the paths above ever change
+  (repo moved, different NAS user), update the Task Scheduler entry to match, not just
+  this doc.
+
+The repo's checkout on this NAS is at `/volume1/lesphotos/app` (the clone is named `app`,
+not `lesphotos`), with `LESPHOTOS_DATA_DIR=/volume1/lesphotos/data` as a sibling — adjust
+the paths above if that ever changes. See `deploy/README.md` for full install/deploy
+steps; this section only covers restart.
 
 ### How validation is done
 
