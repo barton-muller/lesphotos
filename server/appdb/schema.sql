@@ -25,3 +25,18 @@ CREATE TABLE IF NOT EXISTS moments (
     path TEXT NOT NULL UNIQUE,   -- current folder path
     label TEXT NOT NULL          -- current folder name, e.g. "2024-03-10-LeedsWithDad"
 );
+
+-- A file the indexer saw but could not read (permission errors, corrupt
+-- files, etc). Otherwise these are invisible: index() catches the exception
+-- and keeps walking so one bad file can't abort a 4000-photo run, but that
+-- means the failure only ever printed to stderr and vanished the moment the
+-- run ended. Persisting it lets --status and list-users report a standing
+-- "N files unreadable" count between runs, since indexing is meant to run
+-- unattended (cron / POST /index), not watched. Cleared the moment a later
+-- run reads the same path successfully.
+CREATE TABLE IF NOT EXISTS failed_reads (
+    path TEXT PRIMARY KEY,
+    error TEXT NOT NULL,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+);

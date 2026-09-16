@@ -15,6 +15,7 @@ actually needs backing up.
 import hashlib
 import json
 import sqlite3
+import time
 import uuid
 from pathlib import Path
 
@@ -187,3 +188,25 @@ def get_moment_by_path(conn, path):
     return conn.execute(
         "SELECT * FROM moments WHERE path = ?", (str(path),)
     ).fetchone()
+
+
+def record_read_failure(conn, path, error):
+    now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+    conn.execute(
+        "INSERT INTO failed_reads (path, error, first_seen_at, last_seen_at) "
+        "VALUES (?, ?, ?, ?) "
+        "ON CONFLICT(path) DO UPDATE SET error = excluded.error, last_seen_at = excluded.last_seen_at",
+        (str(path), error, now, now),
+    )
+    conn.commit()
+
+
+def clear_read_failure(conn, path):
+    conn.execute("DELETE FROM failed_reads WHERE path = ?", (str(path),))
+    conn.commit()
+
+
+def list_read_failures(conn):
+    return conn.execute(
+        "SELECT * FROM failed_reads ORDER BY last_seen_at DESC"
+    ).fetchall()

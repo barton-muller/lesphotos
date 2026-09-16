@@ -594,6 +594,18 @@ def prune(library, root=None, verbose=False):
         conn.execute("DELETE FROM media WHERE content_hash = ?", (r["content_hash"],))
         conn.execute("DELETE FROM photos WHERE content_hash = ?", (r["content_hash"],))
     conn.commit()
+
+    # A file that failed to read (so never got a photos row at all) needs
+    # its own existence check here - it would otherwise sit in failed_reads
+    # forever once deleted, since it's invisible to the `photos` scan above.
+    for r in conn.execute(
+        "SELECT path FROM failed_reads WHERE path LIKE ?", (prefix + "%",)
+    ).fetchall():
+        if not Path(r["path"]).exists():
+            if verbose:
+                print(f"  prune (failed-read) {r['path']}", file=sys.stderr)
+            db.clear_read_failure(conn, r["path"])
+
     return len(gone)
 
 
@@ -699,6 +711,7 @@ def index(library, root=None, cache=None, limit=None, verbose=False,
                 (chash, st.st_mtime_ns, st.st_size, taken, w, h, int(is_video), dur, int(ok),
                  m_kind, m_offset),
             )
+            db.clear_read_failure(conn, path)
             indexed += 1
             pending += 1
             if pending >= COMMIT_BATCH:
@@ -706,6 +719,7 @@ def index(library, root=None, cache=None, limit=None, verbose=False,
                 pending = 0
         except Exception as e:
             failed += 1
+            db.record_read_failure(conn, path, f"{type(e).__name__}: {e}")
             print(f"  FAILED {path}: {type(e).__name__}: {e}", file=sys.stderr)
 
         if verbose and seen % progress_every == 0:
@@ -819,10 +833,14 @@ def main():
         conn = db.connect(library)
         total = conn.execute("SELECT COUNT(*) c FROM photos").fetchone()["c"]
         pending = conn.execute("SELECT COUNT(*) c FROM media WHERE derived = 0").fetchone()["c"]
+        failures = db.list_read_failures(conn)
         print(f"library:    {library.photos_root}")
         print(f"registered: {total}")
         print(f"thumbnailed:{total - pending}")
         print(f"pending:    {pending}")
+        print(f"unreadable: {len(failures)}")
+        for r in failures:
+            print(f"  {r['path']}: {r['error']} (since {r['first_seen_at']})", file=sys.stderr)
         return
 
     if not HEIC_OK:
@@ -862,6 +880,11 @@ def main():
         f"{stats['peak_child_rss_mb']}MB (ffmpeg, transient)",
         file=sys.stderr,
     )
+    if stats["failed"]:
+        print(
+            f"see --status for the unreadable file list (persists across runs)",
+            file=sys.stderr,
+        )
     # After the walk, not during: a .MOV is often reached before the still
     # it belongs to, so pairing has to see the whole library.
     pairs = link_motion_pairs(library, verbose=args.verbose, path_map=path_map)

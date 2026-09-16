@@ -72,8 +72,11 @@ def cmd_list_users(args):
             conn2 = db.connect(lib)
             total = conn2.execute("SELECT COUNT(*) c FROM photos").fetchone()["c"]
             pending = conn2.execute("SELECT COUNT(*) c FROM media WHERE derived = 0").fetchone()["c"]
+            unreadable = conn2.execute("SELECT COUNT(*) c FROM failed_reads").fetchone()["c"]
             conn2.close()
             state = f"{total} photos, {pending} awaiting thumbnails"
+            if unreadable:
+                state += f", {unreadable} unreadable"
         except Exception:
             state = "not indexed yet"
         print(f"{r['name']:<{width}}  {r['photos_root']}{marker}")
