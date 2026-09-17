@@ -41,6 +41,7 @@ from watchdog.observers import Observer
 import auth
 import config
 import indexer
+import platform_hosts
 from moment_dates import parse_moment_date_prefix
 from reorganize import read_capture_datetime
 
@@ -160,6 +161,16 @@ class _NewFileHandler(FileSystemEventHandler):
         if event.is_directory:
             return
         path = Path(event.src_path)
+        # recursive=True watches everything under the folder, including
+        # @eaDir - DSM's own sidecar cache, which contains files
+        # (SYNOPHOTO_THUMB_XL.jpg etc.) that watchdog reports as newly
+        # created exactly like a real photo. Confirmed in testing: without
+        # this check the watcher moved DSM's own thumbnails into the
+        # library as if they were photos. Same filter iter_media_files
+        # already applies for the same reason.
+        if any(part.startswith(".") or part in platform_hosts.IGNORED_DIRNAMES
+               for part in path.parts):
+            return
         if path in self._seen:
             return
         self._seen.add(path)
