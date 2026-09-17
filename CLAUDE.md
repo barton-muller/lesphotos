@@ -5,9 +5,14 @@ architecture, design rationale and commands — read it first. This file is the 
 obvious from the code: invariants that must not be broken, and bugs that were expensive to
 find once.
 
-Target hardware is a **Synology DS124: 1GB RAM, ARM**. Nearly every choice here follows from
-that. Don't assume something scales without measuring it on real data — this project has a
-consistent history of otherwise-correct-looking code failing at real library size.
+Target hardware is a **Synology DS124: 1GB RAM, ARM, single 3.5" SATA bay holding a real
+spinning HDD** (confirmed via SSH: `rotational=1`, a Toshiba HAT3300 — not an SSD, and this
+model has no room for a second internal drive; only a USB 3.2 Gen 1 port for external
+storage). Nearly every choice here follows from that. Don't assume something scales without
+measuring it on real data — this project has a consistent history of otherwise-correct-looking
+code failing at real library size. The disk being genuinely rotational specifically explains
+why serving many small scattered files (e.g. a bulk thumbnail download) needs different
+handling than it would on any dev machine's SSD — see `docs/decisions/thumb-shards.md`.
 
 ## Hard invariants
 
