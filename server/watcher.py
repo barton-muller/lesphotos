@@ -29,6 +29,7 @@ For each new file under a watched folder:
 """
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -209,6 +210,21 @@ def main():
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stderr,
     )
+
+    # This process needs to run as root (or some other account the phone's
+    # uploading account doesn't match) so it can read files the uploading
+    # app created owner-only - but root's own default umask then creates
+    # derivatives (thumb.webp/preview.webp, cache/<photo_id>/) the API
+    # server's own account can't read back, just the same mismatch in the
+    # other direction. Confirmed in testing: a root-run watcher moved and
+    # indexed two new photos correctly, but neither thumbnail rendered -
+    # even as a placeholder - because the server got a permission error,
+    # not a 404. 0o022 makes every file/dir this process creates
+    # world-readable (world-executable too, needed for directories to be
+    # traversable), which costs nothing since a photo library's
+    # derivatives were never meant to be private from other processes on
+    # the same box in the first place.
+    os.umask(0o022)
 
     observer = Observer()
     watched_any = False
