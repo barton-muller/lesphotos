@@ -59,6 +59,7 @@ from moment_dates import (
     date_prefix_str,
     has_date_prefix,
     has_day_level_prefix,
+    parse_moment_date_from_parts,
     parse_moment_date_prefix,
 )
 
@@ -443,7 +444,7 @@ def _reindex_moved(conn, moved_paths):
         # A move changes the containing folder, which is exactly what
         # moment_date is derived from - stale otherwise, e.g. a photo
         # merged into a differently-dated moment keeping its old sort key.
-        moment_date = parse_moment_date_prefix(Path(path).parent.name)
+        moment_date = parse_moment_date_from_parts(Path(path).parent.name, Path(path).parent.parent.name)
         conn.execute(
             "UPDATE media SET mtime_ns = ?, size = ?, moment_date = ? WHERE content_hash = ?",
             (st.st_mtime_ns, st.st_size, moment_date.isoformat() if moment_date else None, row["content_hash"]),

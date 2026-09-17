@@ -24,6 +24,9 @@ _PATTERNS = (
     re.compile(r"^((\d{4})-(\d{2}))$"),
 )
 
+_BARE_YEAR = re.compile(r"^(\d{4})$")
+_BARE_MONTH = re.compile(r"^(\d{2})$")
+
 
 def parse_moment_date_prefix(name):
     """
@@ -74,6 +77,43 @@ def is_month_only_prefix(name):
     indexer.py's rebalance_month_bucket_dates.
     """
     return _PATTERNS[1].match(name) is not None
+
+
+def is_month_bucket(parent_name, grandparent_name):
+    """
+    True for any folder that holds a month's worth of undated photos and
+    nothing more specific - a watcher-created "YYYY-MM", OR a bare "MM"
+    directly under a bare "YYYY" (a raw phone-backup layout, e.g.
+    <root>/2024/09/). Both need moment_date to track their newest photo
+    rather than default to day=1 - see rebalance_month_bucket_dates.
+    """
+    if is_month_only_prefix(parent_name):
+        return True
+    return bool(_BARE_MONTH.match(parent_name) and grandparent_name and _BARE_YEAR.match(grandparent_name))
+
+
+def parse_moment_date_from_parts(parent_name, grandparent_name):
+    """
+    Like parse_moment_date_prefix, but also recognizes a raw phone-backup
+    layout that splits the date across two path components -
+    <root>/YYYY/MM/photo.jpg - which a single folder name alone can never
+    match, since "MM" on its own (e.g. "09") isn't a date.
+
+    Tries `parent_name` alone first (the normal case: a real moment or a
+    watcher-created YYYY-MM bucket), and only falls back to combining
+    grandparent+parent when the parent is a bare two-digit month AND the
+    grandparent is a bare four-digit year - deliberately narrow, so a
+    folder that happens to be named "09" for some other reason (not
+    nested under a plain "YYYY" year folder) is never misread as a month.
+    """
+    direct = parse_moment_date_prefix(parent_name)
+    if direct is not None:
+        return direct
+    month_match = _BARE_MONTH.match(parent_name)
+    year_match = _BARE_YEAR.match(grandparent_name) if grandparent_name else None
+    if month_match and year_match:
+        return parse_moment_date_prefix(f"{year_match.group(1)}-{month_match.group(1)}")
+    return None
 
 
 def date_prefix_str(name):

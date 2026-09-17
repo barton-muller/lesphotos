@@ -41,7 +41,7 @@ import motion
 import platform_hosts
 import thumb_shards
 from appdb import db
-from moment_dates import is_month_only_prefix, parse_moment_date_prefix
+from moment_dates import is_month_bucket, parse_moment_date_from_parts, parse_moment_date_prefix
 
 # HEIC is not decodable by Pillow alone. Every modern iPhone shoots it by
 # default, so this is load-bearing rather than an edge case - 75 files in
@@ -663,7 +663,7 @@ def rebalance_month_bucket_dates(conn, folder_paths):
     the whole point is to correct every sibling with one query per folder.
     """
     for folder in {Path(f) for f in folder_paths}:
-        if not is_month_only_prefix(folder.name):
+        if not is_month_bucket(folder.name, folder.parent.name):
             continue
         prefix = str(folder) + "/"
         row = conn.execute(
@@ -711,7 +711,7 @@ def backfill_moment_dates(library, root=None, verbose=False):
     touched_folders = set()
     for r in rows:
         path = Path(r["path"])
-        moment_date = parse_moment_date_prefix(path.parent.name)
+        moment_date = parse_moment_date_from_parts(path.parent.name, path.parent.parent.name)
         if moment_date is None:
             continue
         conn.execute(
@@ -823,7 +823,7 @@ def index(library, root=None, cache=None, limit=None, verbose=False,
                 if m_offset is not None:
                     m_kind = "google"
 
-            moment_date = parse_moment_date_prefix(path.parent.name)
+            moment_date = parse_moment_date_from_parts(path.parent.name, path.parent.parent.name)
             moment_date = moment_date.isoformat() if moment_date else None
 
             conn.execute(

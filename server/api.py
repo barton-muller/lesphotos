@@ -34,6 +34,7 @@ import auth
 import config
 import geocoding
 import indexer
+import moment_dates
 import platform_hosts
 import reorganize
 import thumb_shards
@@ -325,13 +326,23 @@ def _moment_of(library: config.Library, path: str) -> tuple[str, str]:
     Moments ARE directories in this design (invariant #3), so this needs no
     stored state and no join - the filesystem already holds the answer.
     PhotoView had to model albums as rows; we don't.
+
+    The label is the parent's own name EXCEPT for a raw phone-backup
+    layout's bare month folder ("09"), which is combined with its parent
+    year folder into "2024-09" instead - a bare "09" is identical across
+    every year, so left alone it doesn't just sort wrong (moment_date
+    fixes that), it also LOOKS identical for every September the library
+    has ever had.
     """
     parent = Path(path).parent
     try:
         rel = parent.relative_to(library.photos_root)
     except ValueError:
         rel = parent
-    return parent.name, str(rel)
+    label = parent.name
+    if moment_dates.is_month_bucket(parent.name, parent.parent.name) and not moment_dates.has_date_prefix(parent.name):
+        label = f"{parent.parent.name}-{parent.name}"
+    return label, str(rel)
 
 
 @app.get("/timeline/count")
