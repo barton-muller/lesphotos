@@ -170,6 +170,23 @@ export function thumbUrl(id: string): string {
   return `${API_BASE}/media/${id}/thumb`
 }
 
+// POST-only: takes {photo_ids: [...]} in the body, unlike the GET
+// derivative URLs above, since a batch of ids doesn't fit a URL.
+export function thumbsBatchUrl(): string {
+  return `${API_BASE}/media/thumbs-batch`
+}
+
+// {shards: [{shard, frozen, member_count}, ...]} - see thumb_shards.py.
+export function thumbShardsManifestUrl(): string {
+  return `${API_BASE}/media/thumb-shards`
+}
+
+// The zip for one FROZEN shard. 404s for an open (not-yet-frozen) shard
+// number - see the server endpoint's own docstring for why.
+export function thumbShardUrl(shard: number): string {
+  return `${API_BASE}/media/thumb-shards/${shard}`
+}
+
 export function previewUrl(id: string): string {
   return `${API_BASE}/media/${id}/preview`
 }

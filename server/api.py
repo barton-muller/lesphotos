@@ -36,6 +36,7 @@ import geocoding
 import indexer
 import platform_hosts
 import reorganize
+import thumb_shards
 from appdb import db
 from moment_dates import date_prefix_str, parse_moment_date_prefix
 
@@ -540,6 +541,47 @@ def media_thumbs_batch(req: ThumbBatchRequest, sess: Session = Depends(current))
         buf.getvalue(),
         media_type="application/zip",
         headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.get("/media/thumb-shards")
+def thumb_shards_manifest(sess: Session = Depends(current)):
+    """
+    Which shards exist and whether each is frozen (see thumb_shards.py).
+    The client fetches a frozen shard's zip once (its content is
+    permanent) and falls back to /media/thumbs-batch for whatever the
+    still-open shard - and any earlier shard this session shouldn't
+    trust as final yet - doesn't cover.
+    """
+    conn = db.connect(sess.library)
+    return {"shards": thumb_shards.list_shards(conn)}
+
+
+@app.get("/media/thumb-shards/{shard}")
+def thumb_shard_zip(shard: int, sess: Session = Depends(current)):
+    """
+    The pre-assembled zip for one FROZEN shard. Refuses to serve an open
+    shard - it's still being appended to (see thumb_shards.assign_and_append),
+    so its zip on disk may not reflect every photo the manifest just
+    promised was in this shard. The client's fallback to /media/thumbs-batch
+    for a not-yet-frozen shard already covers this case; this endpoint
+    only needs to handle the frozen, permanent, safe-to-cache-forever ones.
+    """
+    conn = db.connect(sess.library)
+    row = conn.execute("SELECT frozen FROM thumb_shards WHERE shard = ?", (shard,)).fetchone()
+    if not row or not row["frozen"]:
+        raise HTTPException(status_code=404, detail="not a frozen shard")
+    f = sess.library.thumb_shards_dir / f"{shard}.zip"
+    if not f.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(
+        f,
+        media_type="application/zip",
+        # Frozen means frozen: this exact shard number will never contain
+        # different bytes, unlike the derivative endpoints above which are
+        # "private" for a per-user-privacy reason but still content-stable
+        # per id - same reasoning applies here, just at shard granularity.
+        headers={"Cache-Control": "private, max-age=31536000, immutable"},
     )
 
 

@@ -77,8 +77,16 @@ class Library:
         # Plain-text mirror, readable with a text editor in 20 years.
         return self.sidecar / "stars.json"
 
+    @property
+    def thumb_shards_dir(self) -> Path:
+        # Separate from cache_root (which is strictly photo_id-keyed
+        # subdirectories, one per photo - see indexer.py) so nothing that
+        # walks cache_root assuming that layout trips over a shard zip.
+        return self.sidecar / "thumb_shards"
+
     def ensure_dirs(self) -> None:
         self.cache_root.mkdir(parents=True, exist_ok=True)
+        self.thumb_shards_dir.mkdir(parents=True, exist_ok=True)
 
     def __repr__(self) -> str:
         return f"Library({self.photos_root})"

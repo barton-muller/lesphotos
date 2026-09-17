@@ -140,26 +140,37 @@ function App() {
   // to run while the other is idle - but its own flag stops two downloads
   // overlapping the same way.
   const downloadingRef = useRef(false)
+  const downloadAbortRef = useRef<AbortController | null>(null)
   async function runDownloadAll() {
     if (downloadingRef.current) return
     downloadingRef.current = true
     setDownloadingThumbs(true)
     setThumbDownloadMessage('')
+    const controller = new AbortController()
+    downloadAbortRef.current = controller
     try {
-      const result = await downloadAllThumbnails((done, total) =>
-        setThumbDownloadMessage(`${done}/${total} thumbnails`),
+      const result = await downloadAllThumbnails(
+        (done, total) => setThumbDownloadMessage(`${done}/${total} thumbnails`),
+        controller.signal,
       )
       setThumbDownloadMessage(
-        result.failed
-          ? `${result.downloaded} downloaded, ${result.failed} failed`
-          : `${result.downloaded} downloaded`,
+        controller.signal.aborted
+          ? `stopped - ${result.downloaded} downloaded`
+          : result.failed
+            ? `${result.downloaded} downloaded, ${result.failed} failed`
+            : `${result.downloaded} downloaded`,
       )
     } catch (err) {
       setThumbDownloadMessage(err instanceof Error ? err.message : String(err))
     } finally {
+      downloadAbortRef.current = null
       downloadingRef.current = false
       setDownloadingThumbs(false)
     }
+  }
+
+  function stopDownloadAll() {
+    downloadAbortRef.current?.abort()
   }
 
   async function handleLogout() {
@@ -445,21 +456,22 @@ function App() {
               <button
                 type="button"
                 data-testid="sync-all"
-                disabled={downloadingThumbs}
-                title="Download every thumbnail so the whole library works offline"
+                title={
+                  downloadingThumbs
+                    ? 'Stop downloading - photos already fetched stay saved'
+                    : 'Download every thumbnail so the whole library works offline'
+                }
                 onClick={() => {
                   setMenuOpen(false)
-                  runDownloadAll()
+                  if (downloadingThumbs) {
+                    stopDownloadAll()
+                  } else {
+                    runDownloadAll()
+                  }
                 }}
-                style={{
-                  display: 'block',
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '8px',
-                  opacity: downloadingThumbs ? 0.6 : 1,
-                }}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px' }}
               >
-                {downloadingThumbs ? 'Downloading…' : 'Download all for offline'}
+                {downloadingThumbs ? 'Stop downloading' : 'Download all for offline'}
               </button>
               <button
                 type="button"

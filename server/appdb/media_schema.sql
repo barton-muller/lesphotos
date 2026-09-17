@@ -72,3 +72,41 @@ CREATE INDEX IF NOT EXISTS idx_media_derived ON media(derived);
 -- The idx_media_motion index is created by db.connect() AFTER its column
 -- migration, not here: on a pre-existing database this script runs before
 -- is_motion_clip exists, and indexing a missing column is a hard error.
+
+-- Thumbnail zip shards (see docs/decisions/thumb-shards.md), a cache of
+-- pre-assembled zip archives so a bulk "download all" doesn't cost one
+-- scattered-file disk seek per photo on the NAS's spinning HDD.
+--
+-- Assigned by DERIVATION order (see derive_shard/derive_seq below), not
+-- taken_at: derive_pending processes its backlog newest-first, so if
+-- shards were keyed by capture date, one derive-pending run could touch
+-- (and invalidate) shards spanning the whole library instead of just
+-- appending to the current tail. Derivation order is monotonic and
+-- append-only regardless of what dates the photos themselves carry, and
+-- is completely unaffected by moment renames/merges (those only ever
+-- touch a photo's `path`, never this).
+--
+-- A shard is either OPEN (frozen = 0: still being appended to, must be
+-- rebuilt/re-fetched live rather than trusted as complete) or FROZEN
+-- (frozen = 1: has exactly SHARD_SIZE members - see indexer.py - and its
+-- zip is permanent and never touched again). Exactly one shard is ever
+-- open at a time; a new one starts only when the current one reaches
+-- SHARD_SIZE.
+CREATE TABLE IF NOT EXISTS thumb_shards (
+    shard INTEGER PRIMARY KEY,
+    frozen INTEGER NOT NULL DEFAULT 0,
+    member_count INTEGER NOT NULL DEFAULT 0
+);
+
+-- Which shard each derived photo belongs to. One row per photo that has
+-- ever been derived; a photo is assigned exactly once, at derive time,
+-- and never moves shards afterward (even across a re-derive - see
+-- thumb-shards.md's "re-derive" scenario for why a stale entry in a
+-- frozen shard's zip is an accepted, documented trade rather than
+-- something this table tries to detect).
+CREATE TABLE IF NOT EXISTS thumb_shard_members (
+    content_hash TEXT PRIMARY KEY,
+    shard INTEGER NOT NULL,
+    photo_id TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thumb_shard_members_shard ON thumb_shard_members(shard);

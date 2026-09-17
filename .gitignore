@@ -31,3 +31,7 @@ server/data/appdb.sqlite3-wal
 
 # Real deployment secrets (LESPHOTOS_SECRET). The .example is committed.
 deploy/lesphotos.env
+
+# GeoNames cities15000 dataset - fetched on demand via
+# `python tools/city_lookup.py --fetch`, not source.
+tools/data/

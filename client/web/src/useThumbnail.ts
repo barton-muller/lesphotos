@@ -29,7 +29,17 @@ export function useThumbnail(id: string): string | null {
   useEffect(() => {
     if (resident) return
     let cancelled = false
-    loadThumbnailUrl(id).then(() => {
+    // allowNetwork: false - the app is designed to run fully offline
+    // (per "Download All" / downloadAllThumbnails), so a tile scrolling
+    // into view reads only what's already in IndexedDB rather than
+    // hitting the network itself. Network-driven scroll-loading also
+    // directly competed with a running bulk download: both write
+    // db.photos.update() for the same row, and IndexedDB serializes
+    // readwrite transactions per store, so scrolling during "Download
+    // All" measurably slowed it down. A tile with nothing resident
+    // just stays a placeholder until Download All (or a future sync)
+    // fills it in.
+    loadThumbnailUrl(id, { allowNetwork: false }).then(() => {
       // The tile may have been recycled onto a different photo mid-read.
       if (!cancelled) setLoaded((n) => n + 1)
     })
