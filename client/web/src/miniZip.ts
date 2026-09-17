@@ -19,7 +19,12 @@ const LOCAL_FILE_HEADER_SIGNATURE = 0x04034b50
 
 export interface ZipEntry {
   name: string
-  data: Uint8Array
+  // Parameterized, not plain `Uint8Array` (which now defaults to the wider
+  // `Uint8Array<ArrayBufferLike>`): every instance here is sliced from the
+  // `ArrayBuffer` passed into readStoredZip, and callers pass this straight
+  // into `new Blob([...])`, whose BlobPart type no longer accepts the
+  // widened form.
+  data: Uint8Array<ArrayBuffer>
 }
 
 export function readStoredZip(bytes: ArrayBuffer): ZipEntry[] {

@@ -279,7 +279,6 @@ export async function downloadAllThumbnails(
   //     factor - the transfer itself (a few KB/photo) was never slow.
   const HTTP_BATCH_SIZE = 200
   const CONCURRENCY = 4 // batches in flight at once, not individual photos
-  let nextIndex = 0
 
   async function fetchAndStoreBatch(ids: string[]) {
     // Removed from needIds regardless of outcome (found or not) - this
