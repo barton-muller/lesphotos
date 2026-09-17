@@ -36,7 +36,15 @@ CREATE TABLE IF NOT EXISTS media (
     motion_offset INTEGER,
     -- 1 when this row IS the .MOV half of an Apple pair, so the timeline
     -- can hide it without losing the file.
-    is_motion_clip INTEGER NOT NULL DEFAULT 0
+    is_motion_clip INTEGER NOT NULL DEFAULT 0,
+    -- The photo's MOMENT date (its containing folder's own date prefix,
+    -- see moment_dates.py), NOT taken_at. /timeline sorts by this first so
+    -- a moment's photos stay together even when one photo's own capture
+    -- time disagrees with the folder (see /timeline's docstring in api.py).
+    -- NULL for a folder with no parseable date prefix - sorts last.
+    -- Derived from the path, like everything else here: rebuildable by
+    -- re-indexing, never a second source of truth for the folder name.
+    moment_date TEXT
 );
 
 -- The timeline query is ORDER BY taken_at DESC with a LIMIT/OFFSET, so this

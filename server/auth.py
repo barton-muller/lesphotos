@@ -50,6 +50,13 @@ def connect():
     conn = sqlite3.connect(config.AUTH_DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.executescript(_SCHEMA_PATH.read_text())
+    # CREATE TABLE IF NOT EXISTS above no-ops on an existing `users` table,
+    # so watch_paths has to be added by migration for any auth.sqlite3
+    # created before this column existed.
+    existing_cols = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+    if "watch_paths" not in existing_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN watch_paths TEXT")
+        conn.commit()
     return conn
 
 
@@ -117,6 +124,35 @@ def set_photos_root(conn, name: str, photos_root: str | Path) -> bool:
     root = Path(photos_root).expanduser().resolve()
     cur = conn.execute(
         "UPDATE users SET photos_root = ? WHERE name = ?", (str(root), name)
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def get_watch_paths(conn, name: str) -> list[str]:
+    row = get_user_by_name(conn, name)
+    if row is None or not row["watch_paths"]:
+        return []
+    return json.loads(row["watch_paths"])
+
+
+def add_watch_path(conn, name: str, path: str | Path) -> bool:
+    resolved = str(Path(path).expanduser().resolve())
+    paths = get_watch_paths(conn, name)
+    if resolved not in paths:
+        paths.append(resolved)
+    cur = conn.execute(
+        "UPDATE users SET watch_paths = ? WHERE name = ?", (json.dumps(paths), name)
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def remove_watch_path(conn, name: str, path: str | Path) -> bool:
+    resolved = str(Path(path).expanduser().resolve())
+    paths = [p for p in get_watch_paths(conn, name) if p != resolved]
+    cur = conn.execute(
+        "UPDATE users SET watch_paths = ? WHERE name = ?", (json.dumps(paths), name)
     )
     conn.commit()
     return cur.rowcount > 0

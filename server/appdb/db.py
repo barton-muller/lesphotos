@@ -76,12 +76,14 @@ def connect(library):
         ("motion_path", "TEXT"),
         ("motion_offset", "INTEGER"),
         ("is_motion_clip", "INTEGER NOT NULL DEFAULT 0"),
+        ("moment_date", "TEXT"),
     ):
         if col not in media_cols:
             conn.execute(f"ALTER TABLE media ADD COLUMN {col} {decl}")
     if media_cols and "is_motion_clip" not in media_cols:
         conn.commit()
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_motion ON media(is_motion_clip)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_media_moment_date ON media(moment_date DESC)")
     # WAL lets the indexer write while the API serves reads, instead of the
     # two blocking each other - the indexer is a long-running writer, which
     # is exactly the case rollback-journal mode handles worst. NORMAL sync

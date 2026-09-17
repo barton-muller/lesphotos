@@ -14,5 +14,11 @@ CREATE TABLE IF NOT EXISTS users (
     -- Absolute path to this user's library. Not derived from the name:
     -- "could be somewhere else" - one user may sit on another volume.
     photos_root  TEXT NOT NULL,
-    created_at   TEXT NOT NULL
+    created_at   TEXT NOT NULL,
+    -- JSON array of absolute paths the watcher should monitor for this
+    -- user (e.g. a phone's Synology Photos backup destination). Account
+    -- configuration, the same category of fact as photos_root - not
+    -- library data, so it lives here rather than in any per-library file.
+    -- NULL/empty means "not watched"; opt-in per user.
+    watch_paths  TEXT
 );

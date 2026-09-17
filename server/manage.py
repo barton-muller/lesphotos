@@ -13,6 +13,8 @@ see another library.
     python3 manage.py list-users
     python3 manage.py passwd alice
     python3 manage.py set-root alice /volume2/photos/alice
+    python3 manage.py add-watch-path alice /volume1/homes/alice/Photos/MobileBackup/iPhone
+    python3 manage.py remove-watch-path alice /volume1/homes/alice/Photos/MobileBackup/iPhone
     python3 manage.py remove-user alice
 """
 
@@ -81,6 +83,9 @@ def cmd_list_users(args):
             state = "not indexed yet"
         print(f"{r['name']:<{width}}  {r['photos_root']}{marker}")
         print(f"{'':<{width}}  {state}")
+        watch_paths = auth.get_watch_paths(conn, r["name"])
+        if watch_paths:
+            print(f"{'':<{width}}  watching: {', '.join(watch_paths)}")
 
 
 def cmd_passwd(args):
@@ -103,6 +108,25 @@ def cmd_set_root(args):
         sys.exit(f"photos folder does not exist: {root}")
     auth.set_photos_root(conn, args.name, root)
     print(f"{args.name} -> {root.resolve()}")
+
+
+def cmd_add_watch_path(args):
+    conn = auth.connect()
+    if not auth.get_user_by_name(conn, args.name):
+        sys.exit(f"no such user: {args.name}")
+    path = Path(args.path).expanduser()
+    if not path.is_dir():
+        sys.exit(f"folder does not exist: {path}")
+    auth.add_watch_path(conn, args.name, path)
+    print(f"{args.name} now watches: {path.resolve()}")
+
+
+def cmd_remove_watch_path(args):
+    conn = auth.connect()
+    if not auth.get_user_by_name(conn, args.name):
+        sys.exit(f"no such user: {args.name}")
+    auth.remove_watch_path(conn, args.name, Path(args.path).expanduser())
+    print(f"{args.name} no longer watches: {args.path}")
 
 
 def cmd_remove_user(args):
@@ -145,6 +169,16 @@ def main():
     p.add_argument("name")
     p.add_argument("photos_root")
     p.set_defaults(func=cmd_set_root)
+
+    p = sub.add_parser("add-watch-path", help="watch a folder for new uploads (e.g. a phone backup destination)")
+    p.add_argument("name")
+    p.add_argument("path")
+    p.set_defaults(func=cmd_add_watch_path)
+
+    p = sub.add_parser("remove-watch-path", help="stop watching a folder")
+    p.add_argument("name")
+    p.add_argument("path")
+    p.set_defaults(func=cmd_remove_watch_path)
 
     p = sub.add_parser("remove-user", help="delete a login (never touches photos)")
     p.add_argument("name")

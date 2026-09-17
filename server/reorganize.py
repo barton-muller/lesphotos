@@ -54,6 +54,12 @@ except ImportError:
 
 import platform_hosts
 from appdb import db
+from moment_dates import (
+    date_prefix_str,
+    has_date_prefix,
+    has_day_level_prefix,
+    parse_moment_date_prefix,
+)
 
 # Every path the client sees is expressed relative to the user's own
 # library root, prefixed with "/photos". That prefix is a leftover of
@@ -256,11 +262,13 @@ def auto_generate_moments(library, source_dir, gap=DEFAULT_EVENT_GAP, dry_run=Fa
     - Walks recursively, so it works whether photos sit directly in
       source_dir or in nested YYYY/MM-style subfolders under it.
     - Skips any file already sitting under a folder that looks like an
-      already-organized moment (a YYYY-MM-DD-prefixed directory name
-      anywhere in its path) - makes this safe to re-run without re-shuffling
-      moments a previous run (or the user) already created, and safe to
-      point at a root that's a mix of already-organized and not-yet-organized
-      photos.
+      already-organized moment (a day-level YYYY-MM-DD-prefixed directory
+      name anywhere in its path - a coarser YYYY-MM month bucket does NOT
+      count as organized, since that's exactly the intermediate shape this
+      function exists to sweep up) - makes this safe to re-run without
+      re-shuffling moments a previous run (or the user) already created,
+      and safe to point at a root that's a mix of already-organized and
+      not-yet-organized photos.
     - A single file with unreadable/missing EXIF never aborts the whole
       operation (read_capture_datetime always returns something, falling
       back to mtime).
@@ -319,7 +327,12 @@ def auto_generate_moments(library, source_dir, gap=DEFAULT_EVENT_GAP, dry_run=Fa
             continue
         if str(path) in paired_clips:
             continue
-        if any(_has_date_prefix(part) for part in path.relative_to(source_dir).parts[:-1]):
+        # A day-level prefix (or fuller) means "already a real moment" and
+        # is skipped; a month-only YYYY-MM prefix (e.g. what the watcher
+        # files new uploads under before this function ever sees them) is
+        # NOT treated as organized - that's an intermediate state this
+        # function's whole job is to sweep into real moments.
+        if any(has_day_level_prefix(part) for part in path.relative_to(source_dir).parts[:-1]):
             continue
         candidates.append(path)
 
@@ -381,21 +394,6 @@ def auto_generate_moments(library, source_dir, gap=DEFAULT_EVENT_GAP, dry_run=Fa
     return plan
 
 
-_DATE_PREFIX_LEN = len("YYYY-MM-DD")
-
-
-def _has_date_prefix(name):
-    """True for a "YYYY-MM-DD-..." style moment folder name."""
-    return (
-        len(name) >= _DATE_PREFIX_LEN
-        and name[:4].isdigit()
-        and name[4] == "-"
-        and name[5:7].isdigit()
-        and name[7] == "-"
-        and name[8:10].isdigit()
-    )
-
-
 def _with_date_prefix(old_name, new_label):
     """
     Keeps a moment's date prefix when the new label doesn't carry one.
@@ -410,9 +408,9 @@ def _with_date_prefix(old_name, new_label):
     date here means a rename can never lose it, while a label that already
     has its own prefix is passed through untouched.
     """
-    if _has_date_prefix(new_label) or not _has_date_prefix(old_name):
+    if has_date_prefix(new_label) or not has_date_prefix(old_name):
         return new_label
-    return f"{old_name[:_DATE_PREFIX_LEN]}-{new_label}"
+    return f"{date_prefix_str(old_name)}-{new_label}"
 
 
 
@@ -440,9 +438,13 @@ def _reindex_moved(conn, moved_paths):
         if not row:
             continue
         st = Path(path).stat()
+        # A move changes the containing folder, which is exactly what
+        # moment_date is derived from - stale otherwise, e.g. a photo
+        # merged into a differently-dated moment keeping its old sort key.
+        moment_date = parse_moment_date_prefix(Path(path).parent.name)
         conn.execute(
-            "UPDATE media SET mtime_ns = ?, size = ? WHERE content_hash = ?",
-            (st.st_mtime_ns, st.st_size, row["content_hash"]),
+            "UPDATE media SET mtime_ns = ?, size = ?, moment_date = ? WHERE content_hash = ?",
+            (st.st_mtime_ns, st.st_size, moment_date.isoformat() if moment_date else None, row["content_hash"]),
         )
     conn.commit()
     _repair_motion_paths(conn, moved_paths)
@@ -543,7 +545,7 @@ def merge_moments(library, moment_paths, new_label):
         raise FileNotFoundError(f"{len(missing)} moment folder(s) no longer exist: {missing}")
 
     earliest = min(moment_paths, key=lambda p: p.name)
-    date_prefix = earliest.name[:10]  # "YYYY-MM-DD"
+    date_prefix = date_prefix_str(earliest.name)
     dest = earliest.parent / f"{date_prefix}-{new_label}"
     dest.mkdir(exist_ok=True)
 

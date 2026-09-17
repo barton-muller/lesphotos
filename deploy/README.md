@@ -158,6 +158,29 @@ Reachability off the LAN is a separate decision — see
 `docs/decisions/remote-access-quickconnect-vs-tailscale.md`. Don't port-forward this:
 it's plain HTTP with a session cookie.
 
+## 8. Optional: the upload watcher
+
+Makes new phone photos show up within moments of upload instead of waiting for someone
+to run the indexer by hand. Off by default — no user has any watch path configured
+until you set one, and the daemon exits immediately (logging why) if none exist.
+
+```sh
+python3 manage.py add-watch-path <user> <folder-the-phone-backs-up-into>
+```
+
+Then a **second, separate** Task Scheduler entry, same shape as step 7's but pointing
+at `run-watcher.sh` instead of `run.sh` — this is deliberately its own process, not
+folded into the server, so a stuck or crashed watcher can never take the API down (see
+`server/watcher.py`'s own docstring):
+
+```sh
+/volume1/lesphotos/deploy/run-watcher.sh >> /volume1/lesphotos-data/watcher.log 2>&1
+```
+
+It moves each new file into `<library>/<YYYY>/<YYYY-MM>/` (not a full dated moment —
+that's `auto_generate_moments`' job, run separately/periodically) and indexes just that
+one destination folder, so a photo becomes visible without a full library rescan.
+
 ## Making changes
 
 ```sh
@@ -206,6 +229,13 @@ password, or read another library.
 **Photos moved or were renamed outside the app** — re-run the indexer with `--prune`
 to drop rows whose file is gone. Moving files by hand breaks the invariant that all
 moves go through the app (see CLAUDE.md).
+
+**A phone upload never appears, even with the watcher running** — check
+`manage.py list-users` shows the watch path under that user, then check the watcher's
+own log for the file's name: a permission mismatch between whatever account uploads
+the file and whatever account the watcher runs as looks exactly like this and is
+silent otherwise (see CLAUDE.md's indexer `failed_reads` notes — the same class of bug,
+same fix: `chmod g+r` on the source folder).
 
 ## Restarting / stopping
 

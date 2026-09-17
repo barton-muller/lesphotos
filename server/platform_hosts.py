@@ -54,6 +54,40 @@ def existing_video_poster(src) -> Path | None:
     return None
 
 
+# Below this, treat the poster as unusably soft rather than trust it -
+# guards against a future DSM version changing its own thumbnail sizing
+# and silently handing out a lower-quality preview than PREVIEW_MAX
+# (1400) calls for. XL is documented at 1280px; anything meaningfully
+# under that is not what this function is named for.
+_MIN_USABLE_POSTER_EDGE = 1000
+
+
+def existing_photo_thumb(src) -> Path | None:
+    """
+    An already-HEIC-decoded still for this photo, if DSM's Image Assistant
+    left one lying around - same artifact existing_video_poster borrows for
+    videos, used here to skip the indexer's own (subprocess-isolated,
+    ~235MB peak measured on a real 5712x4284 HEIC) full decode entirely.
+
+    Unlike existing_video_poster, the caller can always decode this file
+    itself if it wants to - this is a memory/time optimisation, not a
+    capability gap being worked around, so a poster that fails the size
+    check is simply skipped rather than treated as the only option.
+    """
+    src = Path(src)
+    poster = src.parent / _DSM_SIDECAR / src.name / _DSM_POSTER
+    try:
+        if not poster.is_file() or poster.stat().st_size == 0:
+            return None
+        from PIL import Image
+        with Image.open(poster) as im:
+            if min(im.size) < _MIN_USABLE_POSTER_EDGE:
+                return None
+    except OSError:
+        return None
+    return poster
+
+
 _DSM_FILM = "SYNOPHOTO_FILM_H.mp4"
 
 

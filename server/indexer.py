@@ -40,6 +40,7 @@ import config
 import motion
 import platform_hosts
 from appdb import db
+from moment_dates import parse_moment_date_prefix
 
 # HEIC is not decodable by Pillow alone. Every modern iPhone shoots it by
 # default, so this is load-bearing rather than an edge case - 75 files in
@@ -234,13 +235,29 @@ def derive_photo(src, out_dir):
     so the thumbnail would inherit the preview's bitmap. Decoding separately
     lets each pass draft down to what it actually needs, and the second
     decode is cheap precisely because it is itself drafted.
+
+    width/height/taken_at always come from `src` itself, via a header-only
+    read (measured 32MB peak vs. 235MB for a full HEIC decode on a real
+    file) - never from a borrowed thumbnail below, which may be smaller
+    than the original and (unlike the original) isn't guaranteed to carry
+    the real EXIF block at all.
     """
     with Image.open(src) as probe:
         taken_at = exif_taken_at(probe)
         full_w, full_h = probe.size
 
     if src.suffix.lower() in HEIC_EXTS:
-        _derive_heic_isolated(src, out_dir)
+        # DSM's Image Assistant has often already paid this exact decode
+        # cost (see platform_hosts.existing_photo_thumb) - reusing its
+        # output skips the subprocess-isolated full HEIC decode entirely
+        # for both thumb and preview, not just one of them. Falls through
+        # to the real decode when no usable poster exists.
+        poster = platform_hosts.existing_photo_thumb(src)
+        if poster is not None:
+            _derive_one(poster, PREVIEW_MAX, out_dir / "preview.webp", 82)
+            _derive_one(poster, THUMB_MAX, out_dir / "thumb.webp", 80)
+        else:
+            _derive_heic_isolated(src, out_dir)
     else:
         _derive_one(src, PREVIEW_MAX, out_dir / "preview.webp", 82)
         _derive_one(src, THUMB_MAX, out_dir / "thumb.webp", 80)
@@ -609,6 +626,45 @@ def prune(library, root=None, verbose=False):
     return len(gone)
 
 
+def backfill_moment_dates(library, root=None, verbose=False):
+    """
+    Populates media.moment_date for rows indexed before that column existed.
+
+    Deliberately not folded into the incremental scan: moment_date is
+    derived from the path alone (which `photos` already has), not from file
+    contents, so re-deriving it needs no stat/hash/decode - just a read of
+    rows already in the database. Everything else in this module's "one
+    pass must visit every row, or the incrementally-skipped ones stay blank
+    forever" caution still applies: an unchanged file never reaches index()'s
+    per-file body, so a column added after a library was first indexed would
+    otherwise be NULL on every existing row until this runs once.
+    """
+    root = Path(root) if root else library.photos_root
+    conn = db.connect(library)
+    prefix = str(root)
+    rows = conn.execute(
+        "SELECT p.content_hash, p.path FROM photos p "
+        "JOIN media m ON m.content_hash = p.content_hash "
+        "WHERE p.path LIKE ? AND m.moment_date IS NULL",
+        (prefix + "%",),
+    ).fetchall()
+
+    updated = 0
+    for r in rows:
+        moment_date = parse_moment_date_prefix(Path(r["path"]).parent.name)
+        if moment_date is None:
+            continue
+        conn.execute(
+            "UPDATE media SET moment_date = ? WHERE content_hash = ?",
+            (moment_date.isoformat(), r["content_hash"]),
+        )
+        updated += 1
+        if verbose and updated % 200 == 0:
+            print(f"  ...{updated} backfilled", file=sys.stderr)
+    conn.commit()
+    return {"seen": len(rows), "updated": updated}
+
+
 def index(library, root=None, cache=None, limit=None, verbose=False,
           progress_every=200, derive=True):
     """
@@ -701,15 +757,19 @@ def index(library, root=None, cache=None, limit=None, verbose=False,
                 if m_offset is not None:
                     m_kind = "google"
 
+            moment_date = parse_moment_date_prefix(path.parent.name)
+            moment_date = moment_date.isoformat() if moment_date else None
+
             conn.execute(
-                "INSERT INTO media (content_hash, mtime_ns, size, taken_at, width, height, is_video, duration, derived, motion_kind, motion_offset) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(content_hash) DO UPDATE SET "
+                "INSERT INTO media (content_hash, mtime_ns, size, taken_at, width, height, is_video, duration, derived, motion_kind, motion_offset, moment_date) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(content_hash) DO UPDATE SET "
                 "mtime_ns=excluded.mtime_ns, size=excluded.size, taken_at=excluded.taken_at, "
                 "width=excluded.width, height=excluded.height, is_video=excluded.is_video, "
                 "duration=excluded.duration, derived=excluded.derived, "
-                "motion_kind=excluded.motion_kind, motion_offset=excluded.motion_offset",
+                "motion_kind=excluded.motion_kind, motion_offset=excluded.motion_offset, "
+                "moment_date=excluded.moment_date",
                 (chash, st.st_mtime_ns, st.st_size, taken, w, h, int(is_video), dur, int(ok),
-                 m_kind, m_offset),
+                 m_kind, m_offset, moment_date),
             )
             db.clear_read_failure(conn, path)
             indexed += 1
@@ -895,6 +955,14 @@ def main():
             + (f", {pairs['unhidden']} clips unhidden" if pairs["unhidden"] else ""),
             file=sys.stderr,
         )
+
+    # Cheap even on an already-backfilled library (an indexed WHERE
+    # moment_date IS NULL, no rows to touch) - unconditional so a database
+    # from before this column existed catches up on every run, not just
+    # once someone remembers to ask for it.
+    backfill = backfill_moment_dates(library, root=walk_root, verbose=args.verbose)
+    if backfill["updated"]:
+        print(f"moment_date: backfilled {backfill['updated']} rows", file=sys.stderr)
 
     if args.no_derive:
         print(
