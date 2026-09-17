@@ -399,7 +399,7 @@ def timeline(
     conn = db.connect(sess.library)
     rows = conn.execute(
         "SELECT p.photo_id, p.path, p.favorite, m.taken_at, m.width, m.height, m.motion_kind, "
-        "       m.is_video, m.duration "
+        "       m.is_video, m.duration, m.moment_date "
         "FROM media m JOIN photos p ON p.content_hash = m.content_hash "
         "WHERE m.derived = 1 AND m.is_motion_clip = 0 "
         # photo_id last as a tiebreaker: LIMIT/OFFSET paging is only
@@ -432,6 +432,14 @@ def timeline(
             "path": rel_path,
             "moment": label,
             "momentPath": moment_path,
+            # The server's own real sort key (see this endpoint's ORDER
+            # BY) - NOT derivable from `moment` alone for a month-only
+            # bucket folder like "2026-09", whose moment_date tracks its
+            # newest photo rather than defaulting to day=1 of the month
+            # (see indexer.rebalance_month_bucket_dates). A client sorting
+            # by parsing `moment` itself will get that case wrong; this
+            # field is the fix.
+            "momentDate": r["moment_date"],
             "date": r["taken_at"],
             "favorite": bool(r["favorite"]),
             "width": r["width"],
