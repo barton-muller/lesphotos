@@ -39,8 +39,9 @@ from PIL import Image
 import config
 import motion
 import platform_hosts
+import thumb_shards
 from appdb import db
-from moment_dates import parse_moment_date_prefix
+from moment_dates import is_month_only_prefix, parse_moment_date_prefix
 
 # HEIC is not decodable by Pillow alone. Every modern iPhone shoots it by
 # default, so this is load-bearing rather than an edge case - 75 files in
@@ -328,6 +329,20 @@ def derive_pending(library, cache=None, limit=None, verbose=False, path_map=None
                 conn.execute(
                     "UPDATE media SET derived = 1 WHERE content_hash = ?",
                     (r["content_hash"],),
+                )
+                # Shard assignment always targets library.thumb_shards_dir,
+                # not the (possibly remapped, see path_map/--cache above)
+                # `cache` this derive run is writing thumbnails to - shards
+                # are a pure cache-of-a-cache that belongs wherever the API
+                # actually serves from, independent of where a remote
+                # derive machine happened to write the underlying
+                # thumb.webp files. thumb_path is read from `cache`
+                # (this machine, right now) since that's where the bytes
+                # this loop just wrote actually are. Photos and videos
+                # both land at out_dir/thumb.webp (see derive_video_thumb),
+                # so no is_video branch is needed here.
+                thumb_shards.assign_and_append(
+                    conn, library, r["content_hash"], r["photo_id"], out_dir / "thumb.webp",
                 )
                 done += 1
                 if done % COMMIT_BATCH == 0:
@@ -626,6 +641,49 @@ def prune(library, root=None, verbose=False):
     return len(gone)
 
 
+def rebalance_month_bucket_dates(conn, folder_paths):
+    """
+    Fixes moment_date for every photo in a bare "YYYY-MM" folder to the
+    NEWEST taken_at date of any photo currently in it, not the 1st of the
+    month.
+
+    A day-level moment's folder name IS a date the user chose, so it can
+    sort by that name alone. A month bucket has no such date - it's an
+    interim holding pen the watcher creates before auto_generate_moments
+    sweeps it into real moments - so parse_moment_date_prefix's day=1
+    default was sorting a photo taken on the 17th as if from the 1st,
+    pushing it behind older, fully-dated moments instead of near the top.
+    Recomputed for every photo in the folder (not just the new arrival)
+    because the "newest photo in this folder" fact changes for all of
+    them whenever one more photo lands.
+
+    `folder_paths` is deliberately a set of PARENT directories, not
+    individual photo paths - callers pass the small number of folders
+    actually touched by one indexing pass, not one row per photo, since
+    the whole point is to correct every sibling with one query per folder.
+    """
+    for folder in {Path(f) for f in folder_paths}:
+        if not is_month_only_prefix(folder.name):
+            continue
+        prefix = str(folder) + "/"
+        row = conn.execute(
+            "SELECT MAX(m.taken_at) newest FROM media m JOIN photos p ON p.content_hash = m.content_hash "
+            "WHERE p.path LIKE ? || '%' AND instr(substr(p.path, length(?) + 1), '/') = 0",
+            (prefix, prefix),
+        ).fetchone()
+        if not row["newest"]:
+            continue
+        newest_date = row["newest"][:10]
+        conn.execute(
+            "UPDATE media SET moment_date = ? WHERE content_hash IN ("
+            "  SELECT p.content_hash FROM photos p WHERE p.path LIKE ? || '%'"
+            "    AND instr(substr(p.path, length(?) + 1), '/') = 0"
+            ")",
+            (newest_date, prefix, prefix),
+        )
+    conn.commit()
+
+
 def backfill_moment_dates(library, root=None, verbose=False):
     """
     Populates media.moment_date for rows indexed before that column existed.
@@ -650,8 +708,10 @@ def backfill_moment_dates(library, root=None, verbose=False):
     ).fetchall()
 
     updated = 0
+    touched_folders = set()
     for r in rows:
-        moment_date = parse_moment_date_prefix(Path(r["path"]).parent.name)
+        path = Path(r["path"])
+        moment_date = parse_moment_date_prefix(path.parent.name)
         if moment_date is None:
             continue
         conn.execute(
@@ -659,9 +719,14 @@ def backfill_moment_dates(library, root=None, verbose=False):
             (moment_date.isoformat(), r["content_hash"]),
         )
         updated += 1
+        touched_folders.add(path.parent)
         if verbose and updated % 200 == 0:
             print(f"  ...{updated} backfilled", file=sys.stderr)
     conn.commit()
+    # A previously-backfilled month bucket that gains new siblings on a
+    # later run also needs rebalancing, not just brand-new rows - a
+    # NULL-only WHERE above would otherwise never revisit it.
+    rebalance_month_bucket_dates(conn, touched_folders)
     return {"seen": len(rows), "updated": updated}
 
 
@@ -687,6 +752,7 @@ def index(library, root=None, cache=None, limit=None, verbose=False,
     t0 = time.monotonic()
     seen = skipped = indexed = failed = 0
     pending = 0
+    touched_folders = set()
 
     for path, st in iter_media_files(root):
         if limit and seen >= limit:
@@ -774,6 +840,7 @@ def index(library, root=None, cache=None, limit=None, verbose=False,
             db.clear_read_failure(conn, path)
             indexed += 1
             pending += 1
+            touched_folders.add(path.parent)
             if pending >= COMMIT_BATCH:
                 conn.commit()
                 pending = 0
@@ -786,6 +853,13 @@ def index(library, root=None, cache=None, limit=None, verbose=False,
             print(f"  ...{seen} seen, {skipped} unchanged, {indexed} indexed", file=sys.stderr)
 
     conn.commit()
+    # A YYYY-MM bucket has no date of its own (unlike a real moment, whose
+    # folder name the user chose), so every photo in it needs re-sorting to
+    # the folder's newest arrival whenever this run added anything there -
+    # not just the new file, since "newest in this folder" changed for
+    # every sibling too. Cheap: one query per distinct folder touched, not
+    # per photo.
+    rebalance_month_bucket_dates(conn, touched_folders)
     conn.close()
 
     elapsed = time.monotonic() - t0
@@ -867,6 +941,12 @@ def main():
         help="print how many photos are registered and how many still need "
              "derivatives, then exit",
     )
+    ap.add_argument(
+        "--backfill-shards", action="store_true",
+        help="one-time catch-up: assign a thumb-zip shard (see thumb_shards.py) "
+             "to every already-derived photo that predates the shard system. "
+             "Safe to interrupt and re-run.",
+    )
     args = ap.parse_args()
 
     if not args.user and not args.root:
@@ -922,6 +1002,18 @@ def main():
         print(
             f"\nderived={stats['derived']} failed={stats['failed']} "
             f"remaining={stats['remaining']}  elapsed={stats['elapsed_s']}s",
+            file=sys.stderr,
+        )
+        return
+
+    if args.backfill_shards:
+        print(f"backfilling thumb-zip shards for {library.photos_root}", file=sys.stderr)
+        conn = db.connect(library)
+        stats = thumb_shards.backfill(conn, library, verbose=args.verbose)
+        print(
+            f"\nbackfilled={stats['backfilled']} "
+            f"skipped(no thumb on disk)={stats['skipped_no_thumb']} "
+            f"of {stats['total_candidates']} candidates",
             file=sys.stderr,
         )
         return

@@ -52,6 +52,7 @@ try:
 except ImportError:
     pass
 
+import indexer
 import platform_hosts
 from appdb import db
 from moment_dates import (
@@ -433,6 +434,7 @@ def _reindex_moved(conn, moved_paths):
 
     Cost is proportional to the photos actually moved, not to library size.
     """
+    touched_folders = set()
     for path in moved_paths:
         row = conn.execute("SELECT content_hash FROM photos WHERE path = ?", (str(path),)).fetchone()
         if not row:
@@ -446,7 +448,13 @@ def _reindex_moved(conn, moved_paths):
             "UPDATE media SET mtime_ns = ?, size = ?, moment_date = ? WHERE content_hash = ?",
             (st.st_mtime_ns, st.st_size, moment_date.isoformat() if moment_date else None, row["content_hash"]),
         )
+        touched_folders.add(Path(path).parent)
     conn.commit()
+    # A month-only bucket's moment_date tracks its newest photo, not a
+    # fixed day (see indexer.rebalance_month_bucket_dates) - a move into
+    # or within one changes that "newest" fact for every sibling, not
+    # just the moved file.
+    indexer.rebalance_month_bucket_dates(conn, touched_folders)
     _repair_motion_paths(conn, moved_paths)
 
 def rename_moment(library, moment_path, new_label, new_date=None):

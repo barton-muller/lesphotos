@@ -64,6 +64,18 @@ def has_day_level_prefix(name):
     return _PATTERNS[0].match(name) is not None
 
 
+def is_month_only_prefix(name):
+    """
+    True only for the coarser "YYYY-MM" shape - not a day-level moment.
+    A month bucket has no single real date of its own (unlike a real
+    moment, whose folder name IS a date the user chose), so its
+    moment_date needs to track the newest photo actually inside it,
+    recomputed as photos arrive - see
+    indexer.py's rebalance_month_bucket_dates.
+    """
+    return _PATTERNS[1].match(name) is not None
+
+
 def date_prefix_str(name):
     """
     The literal date-prefix substring of `name` (e.g. "2024-03-10" out of
