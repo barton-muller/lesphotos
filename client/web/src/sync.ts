@@ -119,6 +119,7 @@ export async function syncTimeline(
             path: r.path,
             moment: r.moment,
             momentPath: r.momentPath,
+            momentDate: r.momentDate,
             date: r.date,
             favorite: r.favorite ? (1 as const) : (0 as const),
             // No blob yet - the tile fetches it on demand (useThumbnail) or
@@ -134,6 +135,12 @@ export async function syncTimeline(
           cached.path !== r.path ||
           cached.moment !== r.moment ||
           cached.momentPath !== r.momentPath ||
+          // A photo's own moment doesn't change, but a sibling landing in
+          // its month bucket rebalances moment_date for the whole bucket
+          // (indexer.rebalance_month_bucket_dates) - without this, an
+          // existing cached row in that bucket would keep its stale sort
+          // key forever, the same class of bug this field exists to fix.
+          cached.momentDate !== r.momentDate ||
           cached.date !== r.date ||
           cached.favorite !== (r.favorite ? 1 : 0) ||
           // Without this a photo that gains motion on a re-index would keep
@@ -147,6 +154,7 @@ export async function syncTimeline(
           path: r.path,
           moment: r.moment,
           momentPath: r.momentPath,
+          momentDate: r.momentDate,
           date: r.date,
           favorite: r.favorite ? (1 as const) : (0 as const),
           isVideo: r.isVideo ? (1 as const) : (0 as const),

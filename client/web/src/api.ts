@@ -99,6 +99,12 @@ export interface TimelineEntry {
   path: string
   moment: string
   momentPath: string
+  // The server's own ORDER BY key - null only for a moment with no
+  // parseable date prefix at all. NOT derivable from `moment` alone for a
+  // month-only bucket ("2026-09"), whose moment_date tracks its newest
+  // photo rather than defaulting to day=1 (see indexer's
+  // rebalance_month_bucket_dates) - sort on this, not on `moment` text.
+  momentDate: string | null
   date: string
   favorite: boolean
   width: number | null

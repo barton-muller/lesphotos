@@ -23,6 +23,13 @@ export interface CachedPhoto {
   path: string
   moment: string
   momentPath: string
+  // The server's own moment sort key (media.moment_date) - not always
+  // derivable from `moment` alone: a month-only bucket folder ("2026-09")
+  // has its moment_date rebalanced to its newest photo's date rather than
+  // defaulting to day=1 (see indexer.rebalance_month_bucket_dates
+  // server-side). null only when the moment has no parseable date prefix
+  // at all. Timeline.tsx sorts on this, not on `moment` text.
+  momentDate: string | null
   date: string
   // 0 | 1, not boolean: IndexedDB's native key types (see IndexableType)
   // don't include boolean at all, so a boolean-typed field can't be used
@@ -154,6 +161,19 @@ db.version(6)
 // the index, never rewrites stored values (CLAUDE.md), and every existing
 // row predates the field entirely - the next sync repopulates.
 db.version(7)
+  .stores({
+    photos: 'id, moment, date, favorite',
+    fullres: 'id, lastAccessed',
+  })
+  .upgrade(async (tx) => {
+    await tx.table('photos').clear()
+  })
+
+// v8: momentDate is new (server started sending it in /timeline - see
+// api.py's timeline()). Existing rows predate the field, so the Timeline's
+// sort would fall back to `undefined` for every cached photo until the
+// next sync - clearing rather than back-filling, same reasoning as v7.
+db.version(8)
   .stores({
     photos: 'id, moment, date, favorite',
     fullres: 'id, lastAccessed',

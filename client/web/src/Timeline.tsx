@@ -55,20 +55,6 @@ type TimelineRow =
   | { type: 'header'; moment: string; momentPath: string }
   | { type: 'photos'; photos: PhotoMeta[] }
 
-/**
- * Sort key for a moment: its own YYYY-MM-DD prefix.
- *
- * A moment is a directory and its name is what the user renames, so the name
- * decides where it sits in the timeline - not the EXIF dates of the photos
- * inside it, which can disagree with it (an old import, a wrong camera clock,
- * a scan) and used to scatter those photos across the timeline.
- *
- * Undated moments return '' so they sort last, rather than to the top.
- */
-function momentSortKey(moment: string): string {
-  return /^\d{4}-\d{2}-\d{2}/.test(moment) ? moment.slice(0, 10) : ''
-}
-
 function groupByMoment(photos: PhotoMeta[]): MomentGroup[] {
   const groups = new Map<string, MomentGroup>()
   for (const photo of photos) {
@@ -606,9 +592,17 @@ export function Timeline({
           // silently undo the server's ordering: a photo whose EXIF disagrees
           // with its folder would be pulled out of its own moment and dropped
           // wherever its capture time happened to fall.
+          //
+          // momentDate comes straight from the server (media.moment_date),
+          // not re-derived from `moment` text - a month-only bucket folder
+          // ("2026-09") has its moment_date rebalanced to its newest photo's
+          // date rather than defaulting to day=1 (see indexer's
+          // rebalance_month_bucket_dates), which a client-side regex on the
+          // folder name has no way to recover. null sorts last, same as the
+          // old ''-sorts-last behaviour for an unparseable moment.
           .sort((a, b) => {
-            const am = momentSortKey(a.moment)
-            const bm = momentSortKey(b.moment)
+            const am = a.momentDate ?? ''
+            const bm = b.momentDate ?? ''
             if (am !== bm) return am < bm ? 1 : -1
             return a.date < b.date ? 1 : a.date > b.date ? -1 : 0
           }),
