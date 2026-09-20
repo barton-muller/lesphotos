@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
+import { TransformWrapper, TransformComponent, type ReactZoomPanPinchRef } from 'react-zoom-pan-pinch'
 import type { PhotoMeta } from './db'
 import { compatUrl, motionUrl, originalUrl } from './api'
 import { shareOrDownloadPhoto } from './download'
+import { toggleFavorite } from './favorites'
 import { getFullRes, type FullResSource } from './fullres'
 import { MetadataPanel } from './MetadataPanel'
+import { StarIcon } from './StarIcon'
 import { useThumbnail } from './useThumbnail'
 import { useBackToClose } from './useBackToClose'
 
@@ -27,6 +30,32 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
   // fetch - see CLAUDE.md). Without the reset, one unplayable video would
   // pin every subsequent one to the lower-resolution transcode.
   const [useCompat, setUseCompat] = useState(false)
+
+  // Pinch/wheel/double-click zoom on stills only (see the Live Photo note
+  // below). `zoomed` gates the backdrop's tap-to-close and the arrow-key
+  // navigation: without it, panning around a zoomed-in photo would either
+  // close the viewer on a drag that ends over the backdrop, or jump to the
+  // next photo on a stray ArrowLeft/Right meant to nudge the pan. Reset via
+  // key + zoomRef.current?.resetTransform() below - the library's own
+  // `initialScale` only applies on first mount, not on every photo change,
+  // so a manual reset is what stops zoom carrying over between photos.
+  const [zoomed, setZoomed] = useState(false)
+  const zoomRef = useRef<ReactZoomPanPinchRef | null>(null)
+  useEffect(() => {
+    zoomRef.current?.resetTransform()
+    setZoomed(false)
+  }, [photo.id])
+
+  // A tap-to-close deferred long enough to see whether a second click
+  // follows (see the TransformComponent wrapper below). Cleared on unmount
+  // so closing the viewer some other way (✕, Escape) doesn't leave a timer
+  // that fires onClose again after the component is already gone.
+  const pendingCloseRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    return () => {
+      if (pendingCloseRef.current) clearTimeout(pendingCloseRef.current)
+    }
+  }, [])
 
   // Live Photo / Motion Photo playback. Two independent gestures:
   //   - the play button LATCHES a loop on, and stops it when pressed again
@@ -130,6 +159,20 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
     }
   }, [photo.id, photo.isVideo])
 
+  // Warm the neighbours' full-res cache so an arrow press has already-cached
+  // bytes to show instead of starting a fetch from scratch. Fire-and-forget:
+  // results are never wired into this photo's own fullResUrl/fullResBlob
+  // state (that must stay pinned to the current photo), just written into
+  // getFullRes's own LRU cache (see fullres.ts) for a later mount of the
+  // same photo to hit. Runs after the main fetch above, so a slow network
+  // finishes the photo actually on screen first.
+  useEffect(() => {
+    const next = photos[index + 1]
+    const prev = photos[index - 1]
+    if (next && !next.isVideo) getFullRes(next).catch(() => {})
+    if (prev && !prev.isVideo) getFullRes(prev).catch(() => {})
+  }, [photos, index])
+
   // Revoke the last outstanding blob URL when the viewer closes for good.
   // Empty deps deliberately: this must run only on unmount, not per photo -
   // per-photo revocation is handled above, when the replacement is ready.
@@ -154,12 +197,16 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose()
-      else if (e.key === 'ArrowLeft' && index > 0) onNavigate(index - 1)
-      else if (e.key === 'ArrowRight' && index < photos.length - 1) onNavigate(index + 1)
+      // Zoomed in, arrow keys nudge the pan instead of changing photos - the
+      // library's own keyboard handling covers that; ours would otherwise
+      // race it and jump to the neighbour mid-pan.
+      else if (e.key === 'ArrowLeft' && index > 0 && !zoomed) onNavigate(index - 1)
+      else if (e.key === 'ArrowRight' && index < photos.length - 1 && !zoomed) onNavigate(index + 1)
+      else if (e.key === 'f' || e.key === 'F') toggleFavorite(photo)
     }
     window.addEventListener('keydown', handleKey)
     return () => window.removeEventListener('keydown', handleKey)
-  }, [index, photos.length, onClose, onNavigate])
+  }, [index, photos.length, onClose, onNavigate, photo, zoomed])
 
   return (
     <div
@@ -172,7 +219,7 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
         justifyContent: 'center',
         zIndex: 1000,
       }}
-      onClick={onClose}
+      onClick={zoomed ? undefined : onClose}
     >
       <div
         data-testid="viewer-moment-title"
@@ -225,7 +272,12 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
           onClick={(e) => e.stopPropagation()}
           onError={() => setUseCompat(true)}
         />
-      ) : (
+      ) : photo.hasMotion ? (
+        // Zoom is deliberately NOT wired up here: press-and-hold-to-play and
+        // pinch-to-zoom both want the same gesture channel, and layering
+        // them would make holding to play a Live Photo ambiguous with
+        // starting a pinch. Plain stills (the branch below) get zoom; Live
+        // Photos keep exactly the interaction they had before.
         <div
           style={{
             position: 'relative',
@@ -241,52 +293,40 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
           // finger, pen and mouse. onPointerLeave/Cancel matter: a finger
           // sliding off the image, or the browser stealing the gesture for
           // a scroll, both need to stop playback or it sticks on.
-          onPointerDown={
-            photo.hasMotion
-              ? () => {
-                  holdStartedAt.current = Date.now()
-                  setMotionHeld(true)
-                }
-              : undefined
-          }
-          onPointerUp={photo.hasMotion ? () => setMotionHeld(false) : undefined}
-          onPointerLeave={photo.hasMotion ? () => setMotionHeld(false) : undefined}
-          onPointerCancel={photo.hasMotion ? () => setMotionHeld(false) : undefined}
+          onPointerDown={() => {
+            holdStartedAt.current = Date.now()
+            setMotionHeld(true)
+          }}
+          onPointerUp={() => setMotionHeld(false)}
+          onPointerLeave={() => setMotionHeld(false)}
+          onPointerCancel={() => setMotionHeld(false)}
           onClick={(e) => {
             // A hold ends in a click, which would otherwise bubble to the
             // backdrop and close the viewer. 250ms separates a deliberate
             // hold from a tap; below that, let the click through so a plain
             // tap on the image still closes as it always did.
-            if (photo.hasMotion && Date.now() - holdStartedAt.current > 250) {
+            if (Date.now() - holdStartedAt.current > 250) {
               e.stopPropagation()
             }
           }}
         >
-        <img
-          src={fullResUrl ?? thumbnailUrl ?? undefined}
-          alt={photo.moment}
-          data-testid="viewer-image"
-          data-loaded={fullResUrl ? 'fullres' : 'thumbnail'}
-          style={{
-            // Explicit width/height, not just max-width/max-height: without
-            // these the box sizes to the <img>'s intrinsic pixel dimensions,
-            // which are tiny for the thumbnail and huge for the full-res
-            // photo - so swapping src from one to the other visibly grew the
-            // image on screen. Forcing both sources into the same
-            // fit-to-screen box makes the full-res swap a pure sharpen in
-            // place.
-            width: '100%',
-            height: '100%',
-            maxWidth: '100%',
-            maxHeight: '100%',
-            objectFit: 'contain',
-            // Kept mounted under the clip rather than swapped out, so the
-            // frame never flashes empty between still and video.
-            visibility: motionPlaying ? 'hidden' : 'visible',
-          }}
-          onClick={(e) => e.stopPropagation()}
-        />
-        {photo.hasMotion && (
+          <img
+            src={fullResUrl ?? thumbnailUrl ?? undefined}
+            alt={photo.moment}
+            data-testid="viewer-image"
+            data-loaded={fullResUrl ? 'fullres' : 'thumbnail'}
+            style={{
+              width: '100%',
+              height: '100%',
+              maxWidth: '100%',
+              maxHeight: '100%',
+              objectFit: 'contain',
+              // Kept mounted under the clip rather than swapped out, so the
+              // frame never flashes empty between still and video.
+              visibility: motionPlaying ? 'hidden' : 'visible',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
           <video
             ref={motionRef}
             src={motionUrl(photo.id)}
@@ -305,8 +345,91 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
               pointerEvents: 'none',
             }}
           />
-        )}
         </div>
+      ) : (
+        // Pinch/wheel/double-click zoom, via react-zoom-pan-pinch rather
+        // than a hand-rolled version like usePinchZoom.ts (used for grid
+        // density): the grid's gesture is a single scalar with no panning or
+        // inertia to get right, but a proper zoomed image needs bounded pan,
+        // velocity/inertia and pinch-anchored-at-fingers zoom together, which
+        // is a lot more surface to hand-roll correctly.
+        //
+        // `zoomed` is read out via onTransform rather than computed from
+        // the pointer event, so it also reflects wheel/double-click zooms,
+        // not just pinch - anything that takes scale away from 1 has to gate
+        // arrow-key nav and backdrop-tap-to-close the same way.
+        <TransformWrapper
+          ref={zoomRef}
+          initialScale={1}
+          minScale={1}
+          maxScale={6}
+          doubleClick={{ mode: 'toggle' }}
+          panning={{ velocityDisabled: false }}
+          onTransform={(_ref, state) => setZoomed(state.scale > 1.001)}
+        >
+          <TransformComponent
+            wrapperStyle={{ width: '100vw', height: '100vh' }}
+            contentStyle={{ width: '100vw', height: '100vh' }}
+            // The library sets pointer-events:none on any <img> inside
+            // .content (so native image-drag doesn't fight its own pan
+            // gesture - see transform-component.module.css), so this
+            // wrapper div is what actually receives every click on the
+            // photo AND on the black bars beside it (objectFit:contain
+            // letterboxes the rendered pixels, but the element's hit box is
+            // still the full 100vw/100vh) - there's no way to tell "tapped
+            // the photo" from "tapped empty space around it" from the event
+            // target alone, unlike the video/Live Photo branches above.
+            //
+            // Always stopping propagation here and closing on a delay
+            // instead of letting the click bubble straight to the
+            // backdrop: a plain click's own `detail` is 1 whether or not a
+            // second click is about to follow within the double-click
+            // window, so there's no way to tell "single tap" from "first
+            // half of a double-click" from this event alone. Deferring the
+            // actual close by the same ~300ms browsers use to recognise a
+            // double-click, and cancelling it if dblclick fires in that
+            // window, is what stops a double-click-to-zoom from closing the
+            // viewer out from under itself.
+            wrapperProps={{
+              onClick: (e) => {
+                e.stopPropagation()
+                if (zoomed) return
+                // Clear any timer a PRIOR click in this same double-click
+                // already scheduled, not just cancel from onDoubleClick:
+                // click, click and dblclick fire as three separate events in
+                // that order, so the second click's own handler runs before
+                // onDoubleClick ever gets a chance to - without this, its
+                // timer replaces (rather than joins) the first click's in
+                // pendingCloseRef, and onDoubleClick's clear then only ever
+                // cancels that second one, leaving nothing to stop the
+                // first from firing 300ms later anyway.
+                if (pendingCloseRef.current) clearTimeout(pendingCloseRef.current)
+                pendingCloseRef.current = setTimeout(() => onClose(), 300)
+              },
+              onDoubleClick: (e) => {
+                e.stopPropagation()
+                if (pendingCloseRef.current) {
+                  clearTimeout(pendingCloseRef.current)
+                  pendingCloseRef.current = null
+                }
+              },
+            }}
+          >
+            <img
+              src={fullResUrl ?? thumbnailUrl ?? undefined}
+              alt={photo.moment}
+              data-testid="viewer-image"
+              data-loaded={fullResUrl ? 'fullres' : 'thumbnail'}
+              style={{
+                width: '100%',
+                height: '100%',
+                maxWidth: '100%',
+                maxHeight: '100%',
+                objectFit: 'contain',
+              }}
+            />
+          </TransformComponent>
+        </TransformWrapper>
       )}
 
       {source && (
@@ -344,6 +467,19 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
         </div>
       )}
 
+      {/*
+        Every button below is positioned with `top`, not `right`, stacked
+        vertically down the right edge instead of the row of right-offsets
+        this used to be: a row sitting under top:12 ran directly across the
+        top of any landscape photo (which fills edge-to-edge at that
+        aspect), so the buttons visually collided with the image itself, not
+        just each other. This also fixed a real overlap bug: share (always
+        shown for a still) and motion (shown whenever hasMotion, independent
+        of isVideo - a Live Photo still has both) previously shared the same
+        right:100 slot and rendered on top of each other for any Live Photo.
+        Stacked vertically instead, each button gets its own row regardless
+        of which subset of {motion, share} apply to this particular photo.
+      */}
       <button
         type="button"
         data-testid="share-button"
@@ -352,7 +488,7 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
           handleShare()
         }}
         disabled={!fullResBlob}
-        style={{ ...closeButtonStyle, right: 100 }}
+        style={{ ...closeButtonStyle, top: 144 }}
       >
         ⇪
       </button>
@@ -361,17 +497,18 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
           data-testid="share-status"
           style={{
             position: 'absolute',
-            top: 14,
-            right: 140,
+            top: 154,
+            right: 56,
             color: 'white',
             fontSize: 12,
+            whiteSpace: 'nowrap',
           }}
         >
           {shareStatus}
         </div>
       )}
 
-      {photo.hasMotion && (
+      {!!photo.hasMotion && (
         <button
           type="button"
           data-testid="motion-button"
@@ -385,7 +522,7 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
           }}
           style={{
             ...closeButtonStyle,
-            right: 100,
+            top: 188,
             // Explicit centring: the glyph is a text character, not an
             // emoji, and without flex it sits off-centre in the circle.
             display: 'flex',
@@ -410,9 +547,28 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
           e.stopPropagation()
           setShowInfo((v) => !v)
         }}
-        style={{ ...closeButtonStyle, right: 56 }}
+        style={{ ...closeButtonStyle, top: 56 }}
       >
         ⓘ
+      </button>
+
+      <button
+        type="button"
+        data-testid="favorite-button"
+        aria-label={photo.favorite ? 'Unfavorite' : 'Favorite'}
+        onClick={(e) => {
+          e.stopPropagation()
+          toggleFavorite(photo)
+        }}
+        style={{
+          ...closeButtonStyle,
+          top: 100,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <StarIcon filled={!!photo.favorite} size={18} color="white" />
       </button>
 
       <button

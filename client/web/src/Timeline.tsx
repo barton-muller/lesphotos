@@ -2,8 +2,9 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { createMomentFromPhotos, mergeMoments, renameMoment, setFavorite, suggestMomentName } from './api'
+import { createMomentFromPhotos, mergeMoments, renameMoment, suggestMomentName } from './api'
 import { db, type PhotoMeta } from './db'
+import { toggleFavorite } from './favorites'
 import { useThumbnail } from './useThumbnail'
 import { usePinchZoom } from './usePinchZoom'
 import { StarIcon } from './StarIcon'
@@ -113,16 +114,6 @@ export function formatMomentTitle(folderName: string): string {
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(' ')
   return `${date} - ${label}`
-}
-
-async function toggleFavorite(photo: PhotoMeta) {
-  const nextBool = !photo.favorite
-  // Optimistic local update first: the appdb-backed API call is the source
-  // of truth server-side, but updating IndexedDB immediately keeps the UI
-  // responsive - if the API call fails, this re-syncs back on next sync
-  // rather than needing a rollback here.
-  await db.photos.update(photo.id, { favorite: nextBool ? 1 : 0 })
-  await setFavorite(photo.path, nextBool)
 }
 
 interface ThumbnailProps {
@@ -741,6 +732,59 @@ export function Timeline({
 
   const fractionalRowRef = useRef(fractionalRow)
   fractionalRowRef.current = fractionalRow
+
+  // Moment at the top of the viewport, kept live on every render so it's
+  // never more than one render stale. Header rows carry `moment` directly;
+  // photo rows only carry it via their photos.
+  const topMomentRef = useRef<string | null>(null)
+  const topRow = rows[Math.floor(fractionalRow)]
+  if (topRow) {
+    topMomentRef.current = topRow.type === 'header' ? topRow.moment : (topRow.photos[0]?.moment ?? null)
+  }
+
+  // Preserve scroll position across a starredOnly round trip: entering
+  // favourites mode saves where you were in the FULL grid, leaving it
+  // restores you there - not a symmetric "remember wherever you just were",
+  // which would instead save the starred-only position on the way out and
+  // hand it right back on the way back in, losing the original spot.
+  // Keyed on `moment` (stable across the filter) rather than row index
+  // (isn't - the two lists have different lengths), same idea as the
+  // refresh-restore above.
+  //
+  // The saved moment must be frozen the instant starredOnly flips to true,
+  // not read later from topMomentRef inside an effect: useLiveQuery's
+  // re-query is async, so several renders happen (still on the OLD rows,
+  // then eventually the NEW ones) before an effect would fire, and
+  // topMomentRef keeps tracking whatever's on screen through all of them -
+  // by the time an effect ran it would already be reading the post-switch
+  // top row. Detecting the transition during render itself, before
+  // topMomentRef is overwritten for this render, is what actually captures
+  // the pre-switch moment.
+  const prevStarredOnlyRef = useRef(starredOnly)
+  const savedMomentRef = useRef<string | null>(null)
+  const pendingRestoreRef = useRef<string | null>(null)
+  if (prevStarredOnlyRef.current !== starredOnly) {
+    prevStarredOnlyRef.current = starredOnly
+    if (starredOnly) {
+      // Entering: remember the full-grid position, don't touch scroll now
+      // (starred-only's own row list decides where to land, same as any
+      // other filter change).
+      savedMomentRef.current = topMomentRef.current
+    } else {
+      // Leaving: hand back whatever was saved on the way in.
+      pendingRestoreRef.current = savedMomentRef.current
+      savedMomentRef.current = null
+    }
+  }
+  useEffect(() => {
+    const moment = pendingRestoreRef.current
+    if (!moment) return
+    const rowIndex = rowIndexByMoment.get(moment)
+    if (rowIndex === undefined) return
+    pendingRestoreRef.current = null
+    virtualizer.scrollToIndex(rowIndex, { align: 'start' })
+  }, [rowIndexByMoment, virtualizer])
+
   useEffect(() => {
     if (!scrollElement) return
     const onScroll = () => {

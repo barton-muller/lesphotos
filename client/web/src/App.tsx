@@ -385,6 +385,62 @@ function App() {
           <StarIcon filled={starredOnly} size={18} />
         </button>
 
+        {/* Grid density (photos per row) previously had no discoverable
+            trigger at all - pinch/ctrl+wheel over the grid works but isn't
+            something anyone would find without being told. This is that
+            control made visible; the gesture keeps working alongside it. */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)',
+            overflow: 'hidden',
+          }}
+        >
+          <button
+            type="button"
+            data-testid="density-decrease"
+            aria-label="Fewer photos per row"
+            title="Fewer photos per row"
+            onClick={() => handleColumnsChange(Math.max(3, columns - 1))}
+            disabled={columns <= 3}
+            style={{
+              width: 30,
+              height: 36,
+              padding: 0,
+              border: 'none',
+              borderRight: '1px solid var(--border)',
+              background: 'var(--surface)',
+              color: columns <= 3 ? 'var(--text-muted)' : 'inherit',
+              cursor: columns <= 3 ? 'default' : 'pointer',
+              fontSize: 16,
+            }}
+          >
+            −
+          </button>
+          <button
+            type="button"
+            data-testid="density-increase"
+            aria-label="More photos per row"
+            title="More photos per row"
+            onClick={() => handleColumnsChange(Math.min(20, columns + 1))}
+            disabled={columns >= 20}
+            style={{
+              width: 30,
+              height: 36,
+              padding: 0,
+              border: 'none',
+              background: 'var(--surface)',
+              color: columns >= 20 ? 'var(--text-muted)' : 'inherit',
+              cursor: columns >= 20 ? 'default' : 'pointer',
+              fontSize: 16,
+            }}
+          >
+            +
+          </button>
+        </div>
+
         {/* Timeline portals its Select/Merge controls in here, so they share
             the header row instead of costing a second one - its selection
             state stays where it is used rather than being lifted into App. */}
