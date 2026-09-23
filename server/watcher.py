@@ -204,6 +204,22 @@ def _resolve_iter_users_watch_paths():
             yield user["name"], library, Path(watch_path)
 
 
+def _scan_backlog(library: config.Library, watch_path: Path) -> None:
+    """
+    Handles files already sitting in a watched folder before this process
+    started - e.g. photos that arrived while the watcher wasn't running
+    (no boot trigger set up yet, or a permission error that only root can
+    read). watchdog's Observer is purely event-driven and never sees
+    these, so without this pass they'd sit unindexed forever.
+    """
+    for path in watch_path.rglob("*"):
+        if any(part.startswith(".") or part in platform_hosts.IGNORED_DIRNAMES
+               for part in path.parts):
+            continue
+        if path.is_file():
+            handle_new_file(library, path)
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -232,6 +248,8 @@ def main():
         if not watch_path.is_dir():
             log.warning("skipping watch path for %s: %s does not exist", name, watch_path)
             continue
+        _scan_backlog(library, watch_path)
+
         handler = _NewFileHandler(library)
         observer.schedule(handler, str(watch_path), recursive=True)
         log.info("watching %s for %s -> %s", watch_path, name, library.photos_root)
