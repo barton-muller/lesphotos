@@ -1,9 +1,8 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useLiveQuery } from 'dexie-react-hooks'
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { createMomentFromPhotos, mergeMoments, renameMoment, suggestMomentName } from './api'
-import { db, type PhotoMeta } from './db'
+import { db, getPhotosVersion, subscribePhotosVersion, type PhotoMeta } from './db'
 import { toggleFavorite } from './favorites'
 import { useThumbnail } from './useThumbnail'
 import { usePinchZoom } from './usePinchZoom'
@@ -35,6 +34,11 @@ const GRID_EDGE_PADDING = 8
 // live there); 'v4' is the original fisheye YearScrubber. Kept switchable so
 // the two can be compared against a real library without a checkout.
 const SCRUBBER: 'v4' | 'v5' = 'v5'
+
+// Persisted so the rail can show a stable start-to-end range from the very
+// first render on any load after the first - see oldestMomentYear's own
+// comment at its declaration.
+const OLDEST_MOMENT_YEAR_KEY = 'lesphotos-oldest-moment-year'
 
 // Rows rendered beyond the viewport on each side. Also feeds the thumbnail
 // cache budget below - these rows are mounted, so they demand thumbnails.
@@ -563,43 +567,137 @@ export function Timeline({
   // and filtering in JS - matters once the library is large (the real
   // ~28,000-photo/user target), not so much at today's test scale, but
   // cheap to do correctly from the start.
-  // Metadata only - `thumbnailBlob` is deliberately stripped here.
+  // Metadata only - thumbnailBlob lives in its own `thumbnails` table (see
+  // db.ts's v9 schema), so this read never touches image bytes at all.
   //
-  // Loading blobs in this query coupled scroll smoothness to image data: the
-  // grid could not lay out until every thumbnail in the library was in one JS
-  // array, and useLiveQuery re-ran the whole thing on any write. Thumbnails now
-  // stream in per visible tile via useThumbnail(); this query stays small
-  // enough to hold the whole library (a few hundred bytes a row).
-  const photos = useLiveQuery(
-    () =>
-      (starredOnly
-        ? db.photos.where('favorite').equals(1).toArray()
-        : db.photos.toArray()
-      ).then((rows) =>
-        rows
-          .map(({ thumbnailBlob: _drop, ...meta }) => meta as PhotoMeta)
-          // Sorted by MOMENT date, matching /timeline's own ORDER BY, then by
-          // capture time within the moment. Sorting on `date` alone here would
-          // silently undo the server's ordering: a photo whose EXIF disagrees
-          // with its folder would be pulled out of its own moment and dropped
-          // wherever its capture time happened to fall.
-          //
-          // momentDate comes straight from the server (media.moment_date),
-          // not re-derived from `moment` text - a month-only bucket folder
-          // ("2026-09") has its moment_date rebalanced to its newest photo's
-          // date rather than defaulting to day=1 (see indexer's
-          // rebalance_month_bucket_dates), which a client-side regex on the
-          // folder name has no way to recover. null sorts last, same as the
-          // old ''-sorts-last behaviour for an unparseable moment.
-          .sort((a, b) => {
-            const am = a.momentDate ?? ''
-            const bm = b.momentDate ?? ''
-            if (am !== bm) return am < bm ? 1 : -1
-            return a.date < b.date ? 1 : a.date > b.date ? -1 : 0
-          }),
-      ),
-    [starredOnly],
-  )
+  // Loading blobs in this query used to couple scroll smoothness to image
+  // data: the grid could not lay out until every thumbnail in the library
+  // was in one JS array, and useLiveQuery re-ran the whole thing on any
+  // write. Thumbnails now stream in per visible tile via useThumbnail();
+  // this query stays small enough to hold the whole library (a few hundred
+  // bytes a row).
+  //
+  // Read in TWO PHASES, not one bulk toArray()/where().equals() - measured
+  // on a real ~26,000-photo library: Safari's IndexedDB backend pays a
+  // per-row cost that Chrome's doesn't (confirmed linear: 500 rows in
+  // 265ms, 26,423 rows in ~13.5s in raw getAll() AND cursor iteration -
+  // same cost either way, so it isn't the bulk-vs-cursor API choice, it's
+  // Safari's per-row overhead at this table size). A single bulk read means
+  // the whole grid sits behind one blank "Loading…" for that entire
+  // stretch.
+  //
+  // Phase 1 reads just FIRST_PAGE_SIZE rows (newest-date-first) and commits
+  // them immediately, so there is something on screen fast regardless of
+  // library size or browser - the case that matters most in practice
+  // (landing here to see what was just added). Phase 2 then reads
+  // everything else in ONE bulk call, same as the original single-toArray()
+  // approach, and commits once. An earlier version chunked ALL ~26,000 rows
+  // into ~27 pieces and re-sorted+re-rendered after every one - safe for
+  // Safari's slow backend, but on Chrome (where the read itself is already
+  // fast) that turned a ~1s load into ~6s: 27 full-array sorts plus 27 grid
+  // re-renders cost far more than the read ever did. Two phases keeps
+  // Safari's "something to look at almost immediately" benefit without
+  // taxing Chrome's already-fast path with per-chunk overhead it doesn't
+  // need.
+  const FIRST_PAGE_SIZE = 500
+  const [photos, setPhotos] = useState<PhotoMeta[] | undefined>(undefined)
+  // The oldest MOMENT year, persisted across page loads so the scrubber can
+  // show the library's true start-to-end range from phase 1 onward instead
+  // of growing as older rows land in phase 2 - a visibly shifting range was
+  // the tell that gave away the two-phase load entirely.
+  //
+  // Deliberately momentDate, not the indexed `date` field: an old camera
+  // with a wrong clock can have date=1970 while momentDate (the folder it
+  // was correctly sorted into) says 2001 - `date` is EXIF capture time,
+  // unrelated to where the photo actually sits in the grid. momentDate has
+  // no index, so finding it cheaply requires having already scanned the
+  // library once - hence persisting it, not querying for it fresh each
+  // load. A brand new library naturally has no persisted value yet, in
+  // which case the rail simply falls back to computing its range from
+  // whatever's loaded so far (its original behaviour, pre-dating this
+  // feature) until phase 2 lands and this gets written for next time.
+  const [oldestMomentYear, setOldestMomentYear] = useState<number | undefined>(() => {
+    try {
+      const v = localStorage.getItem(OLDEST_MOMENT_YEAR_KEY)
+      return v === null ? undefined : Number(v)
+    } catch {
+      return undefined
+    }
+  })
+  // Not db.photos.count(): a rename, favorite toggle, or hasMotion flip
+  // changes a row's contents without changing the row count, and this must
+  // re-trigger the read below just the same - see subscribePhotosVersion's
+  // own comment in db.ts.
+  const tableVersion = useSyncExternalStore(subscribePhotosVersion, getPhotosVersion)
+  useEffect(() => {
+    let cancelled = false
+    setPhotos(undefined)
+    // Sorted by MOMENT date, matching /timeline's own ORDER BY, then by
+    // capture time within the moment. Sorting on `date` alone here would
+    // silently undo the server's ordering: a photo whose EXIF disagrees
+    // with its folder would be pulled out of its own moment and dropped
+    // wherever its capture time happened to fall.
+    //
+    // momentDate comes straight from the server (media.moment_date), not
+    // re-derived from `moment` text - a month-only bucket folder
+    // ("2026-09") has its moment_date rebalanced to its newest photo's
+    // date rather than defaulting to day=1 (see indexer's
+    // rebalance_month_bucket_dates), which a client-side regex on the
+    // folder name has no way to recover. null sorts last, same as the old
+    // ''-sorts-last behaviour for an unparseable moment.
+    function byMomentThenDate(a: PhotoMeta, b: PhotoMeta) {
+      const am = a.momentDate ?? ''
+      const bm = b.momentDate ?? ''
+      if (am !== bm) return am < bm ? 1 : -1
+      return a.date < b.date ? 1 : a.date > b.date ? -1 : 0
+    }
+    async function run() {
+      if (starredOnly) {
+        // Small set - no need for a first-page split.
+        const rows = await db.photos.where('favorite').equals(1).toArray()
+        if (!cancelled) setPhotos(rows.sort(byMomentThenDate))
+        return
+      }
+      // Newest-`date`-first, not primary-key order: a UUID primary key
+      // scatters recent photos more or less randomly, so the person who
+      // just landed here to see today's upload would otherwise wait for
+      // the whole library before it's visible. orderBy uses the `date`
+      // index directly (present since v1). Not exactly the grid's own sort
+      // key (momentDate, then date) since Dexie can only drive a query off
+      // one index at a time - but `date` and `momentDate` are close enough
+      // for recent content that this alone gets today's photos into the
+      // first page, which is the actual goal.
+      const firstPage = await db.photos.orderBy('date').reverse().limit(FIRST_PAGE_SIZE).toArray()
+      if (cancelled) return
+      setPhotos([...firstPage].sort(byMomentThenDate))
+      const rest = await db.photos.orderBy('date').reverse().offset(FIRST_PAGE_SIZE).toArray()
+      if (cancelled) return
+      const all = [...firstPage, ...rest]
+      setPhotos(all.sort(byMomentThenDate))
+      // Now that the whole library is in memory, find the real oldest
+      // momentDate and persist its year for next load - see
+      // oldestMomentYear's own comment above for why this can't be a cheap
+      // indexed query up front.
+      let oldestYear: number | undefined
+      for (const p of all) {
+        if (!p.momentDate) continue
+        const y = Number(p.momentDate.slice(0, 4))
+        if (oldestYear === undefined || y < oldestYear) oldestYear = y
+      }
+      if (oldestYear !== undefined) {
+        setOldestMomentYear(oldestYear)
+        try {
+          localStorage.setItem(OLDEST_MOMENT_YEAR_KEY, String(oldestYear))
+        } catch {
+          // Loses the stable-range nicety for next load only, never correctness.
+        }
+      }
+    }
+    void run()
+    return () => {
+      cancelled = true
+    }
+  }, [starredOnly, tableVersion])
   // Callback ref, not useRef+useEffect([]): the scroll container doesn't
   // exist in the DOM until the `!photos` loading branch below stops
   // rendering (that early-return's JSX has no ref at all) - a mount-once
@@ -1155,6 +1253,7 @@ export function Timeline({
           scrollElement={scrollElement}
           rowAtOffset={rowAtOffset}
           onJumpToRow={(rowIndex) => virtualizer.scrollToIndex(rowIndex, { align: 'start' })}
+          minYear={oldestMomentYear}
         />
       ) : (
         <YearScrubber

@@ -31,6 +31,14 @@ export interface RailScrubberProps {
   narrow?: boolean
   /** Jump to an exact virtualizer row. */
   onJumpToRow: (rowIndex: number) => void
+  /**
+   * Overrides the rail's own minYear (derived from `buckets`) with an
+   * earlier, already-known year - lets the rail show the library's true
+   * start-to-end span immediately during Timeline's two-phase load, rather
+   * than visibly growing as older rows arrive in phase 2. Never used to
+   * shrink the range below what `buckets` already covers.
+   */
+  minYear?: number
 }
 
 /**
@@ -53,13 +61,14 @@ export function RailScrubber({
   rowAtOffset,
   onJumpToRow,
   narrow = false,
+  minYear: minYearOverride,
 }: RailScrubberProps) {
   // The rail spans whole calendar years covering the library, so the year
   // stack always starts and ends on a real year boundary.
   const range = useMemo(() => {
     if (buckets.length === 0) {
       const y = new Date().getFullYear()
-      return { minYear: y, maxYear: y }
+      return { minYear: minYearOverride ?? y, maxYear: y }
     }
     let minYear = Infinity
     let maxYear = -Infinity
@@ -67,8 +76,9 @@ export function RailScrubber({
       if (b.year < minYear) minYear = b.year
       if (b.year > maxYear) maxYear = b.year
     }
+    if (minYearOverride !== undefined) minYear = Math.min(minYear, minYearOverride)
     return { minYear, maxYear }
-  }, [buckets])
+  }, [buckets, minYearOverride])
 
   /**
    * Anchors mapping calendar position -> row index, ascending by row.

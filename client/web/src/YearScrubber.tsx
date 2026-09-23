@@ -152,13 +152,22 @@ export function selectLabels(
   buckets: MonthBucket[],
   currentRowIndex: number,
   totalRows: number,
+  // Overrides the oldest year derived from `buckets` when given - lets the
+  // caller show the library's TRUE start-to-end range immediately, before
+  // every month's buckets have actually loaded (Timeline's two-phase read:
+  // the newest photos render first, older years fill in a few seconds
+  // later). Without this the rail's own range visibly grew as older rows
+  // arrived, which is exactly the tell that gave the staged load away.
+  // Ignored if it's newer than what `buckets` already has, so a caller that
+  // doesn't know better can never SHRINK the range below what's real.
+  minYear?: number,
 ): { labels: ScrubberLabel[]; indicatorTop: number } {
   if (buckets.length === 0 || totalRows <= 1) return { labels: [], indicatorTop: INDICATOR_TOP_PCT }
 
   // Buckets are ordered newest-first (grid order), so the newest year is
   // at the head and the oldest at the tail.
   const newestYear = buckets[0].year
-  const oldestYear = buckets[buckets.length - 1].year
+  const oldestYear = Math.min(buckets[buckets.length - 1].year, minYear ?? Infinity)
 
   // Which bucket is the cursor currently on? Buckets are sorted by
   // rowIndex ascending, so this is a plain binary search.
@@ -530,9 +539,19 @@ interface YearScrubberProps {
   /** Jump to an exact virtualizer row - used for label clicks, where
    *  interpolating a fraction would land somewhere approximate. */
   onJumpToRow: (rowIndex: number) => void
+  /** See selectLabels' own doc - keeps the rail's range stable during a
+   *  staged load instead of visibly growing as older rows arrive. */
+  minYear?: number
 }
 
-export function YearScrubber({ buckets, totalRows, scrollElement, onJumpToFraction, onJumpToRow }: YearScrubberProps) {
+export function YearScrubber({
+  buckets,
+  totalRows,
+  scrollElement,
+  onJumpToFraction,
+  onJumpToRow,
+  minYear,
+}: YearScrubberProps) {
   const trackRef = useRef<HTMLDivElement>(null)
   const [indicatorFraction, setIndicatorFraction] = useState(0)
   const [dragging, setDragging] = useState(false)
@@ -568,8 +587,8 @@ export function YearScrubber({ buckets, totalRows, scrollElement, onJumpToFracti
   const { labels, indicatorTop } = useMemo(() => {
     if (totalRows <= 1) return { labels: [] as ScrubberLabel[], indicatorTop: INDICATOR_TOP_PCT }
     const currentRow = indicatorFraction * (totalRows - 1)
-    return selectLabels(buckets, currentRow, totalRows)
-  }, [buckets, indicatorFraction, totalRows])
+    return selectLabels(buckets, currentRow, totalRows, minYear)
+  }, [buckets, indicatorFraction, totalRows, minYear])
 
   // Pointer -> scroll fraction, resolved against the labels actually on
   // screen. Track position is a piecewise zone layout now, not an
