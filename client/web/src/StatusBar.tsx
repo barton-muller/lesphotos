@@ -27,13 +27,14 @@ export function StatusBar({
   downloadingThumbs,
   thumbDownloadMessage,
   offline,
+  localStorageError,
 }: {
   syncStatus: SyncState
   syncMessage: string
   photoCount: number | null
-  // Rows that have a thumbnailBlob - i.e. actually browsable offline right
-  // now, as opposed to just known about. null while the count itself is
-  // loading, same convention as photoCount.
+  // Rows with a thumbnails-table entry - i.e. actually browsable offline
+  // right now, as opposed to just known about. null while the count itself
+  // is loading, same convention as photoCount.
   thumbnailCount: number | null
   downloadingThumbs: boolean
   thumbDownloadMessage: string
@@ -42,6 +43,12 @@ export function StatusBar({
   // error to shout about - "Sync failed: Failed to fetch" reads like the
   // app is broken when the NAS is merely asleep.
   offline?: boolean
+  // Set when a sync failed because of a local IndexedDB write, not a
+  // network problem - e.g. a bulkPut rejected by the browser (quota, a
+  // malformed Blob). Distinct from `offline`: the server was reachable and
+  // answered fine, so labeling this "Offline" would point the user at the
+  // wrong problem entirely.
+  localStorageError?: string
 }) {
   const counts =
     photoCount === null
@@ -53,13 +60,15 @@ export function StatusBar({
       ? `Loading metadata… ${syncMessage}`
       : downloadingThumbs
         ? `Downloading thumbnails… ${thumbDownloadMessage}`
-        : offline
-          ? 'Offline'
-          : syncStatus === 'error'
-            ? `Sync failed: ${syncMessage}`
-            : thumbDownloadMessage
-              ? thumbDownloadMessage
-              : ''
+        : localStorageError
+          ? `Local storage error: ${localStorageError}`
+          : offline
+            ? 'Offline'
+            : syncStatus === 'error'
+              ? `Sync failed: ${syncMessage}`
+              : thumbDownloadMessage
+                ? thumbDownloadMessage
+                : ''
 
   const text = activity ? `${activity}${counts ? ` — ${counts}` : ''}` : counts
 
@@ -77,7 +86,10 @@ export function StatusBar({
         padding: '0 40px 0 12px',
         height: 28,
         fontSize: 12,
-        color: syncStatus === 'error' && !offline ? 'var(--danger)' : 'var(--text-muted)',
+        color:
+          (syncStatus === 'error' && !offline) || localStorageError
+            ? 'var(--danger)'
+            : 'var(--text-muted)',
         borderTop: '1px solid var(--border)',
         background: 'var(--surface)',
         whiteSpace: 'nowrap',

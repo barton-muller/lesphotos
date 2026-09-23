@@ -19,6 +19,22 @@ const APPROX_THUMB_BYTES = 20 * 1024
 
 export class QuotaError extends Error {}
 
+// Tells apart a local IndexedDB write failure from a network/server
+// problem, so a sync's catch block doesn't mislabel one as the other (see
+// App.tsx's runSync). Keyed on err.name - Dexie throws BulkError for a
+// partial bulkPut/bulkUpdate failure and various DexieError subclasses
+// (ConstraintError, DataError, ...) for other IndexedDB failures - rather
+// than matching err.message text, which is browser/engine-dependent and
+// not something to rely on for classification.
+export function isLocalStorageError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err.name === 'BulkError' ||
+      err.name.includes('Dexie') ||
+      /object store|IDBDatabase|QuotaExceededError|Blob\/File data/i.test(err.message))
+  )
+}
+
 // Last count seen from /timeline/count, persisted so the skip works from
 // a cold page load too, not just within one session.
 const LAST_COUNT_KEY = 'lesphotos-last-timeline-count'
@@ -96,6 +112,13 @@ export async function syncTimeline(
   // id-presence check alone would skip the row and leave it showing the old
   // name forever - the exact bug that made rename appear to do nothing
   // under the PhotoView backend (see CLAUDE.md).
+  //
+  // This toArray() runs on every sync, including the routine one that fires
+  // on every foreground/focus - not just first login. Before db.ts's v9
+  // schema split, `photos` rows carried thumbnailBlob inline, so this read
+  // deserialized every cached thumbnail in the library on every single
+  // foreground event, only to discard the reference below. Rows are
+  // metadata-only now, so this is cheap regardless of library size.
   const cachedById = new Map((await db.photos.toArray()).map((p) => [p.id, p]))
   const remoteIds = new Set<string>()
 
@@ -149,6 +172,11 @@ export async function syncTimeline(
           cached.hasMotion !== (r.hasMotion ? 1 : 0)
         if (!changed) return null
         updated += 1
+        // Safe to spread the whole cached row now by construction, not by
+        // luck: CachedPhoto has no blob field to accidentally carry along
+        // into this bulkPut (thumbnailBlob lives in its own `thumbnails`
+        // table - db.ts's v9 schema). A metadata-only change no longer
+        // risks re-serializing an unrelated cached thumbnail.
         return {
           ...cached,
           path: r.path,
@@ -190,7 +218,13 @@ export async function downloadAllThumbnails(
   signal?: AbortSignal,
 ): Promise<{ downloaded: number; failed: number; total: number }> {
   const rows = await db.photos.orderBy('date').reverse().toArray()
-  const need = rows.filter((r) => !r.thumbnailBlob)
+  // Diffed against the thumbnails table's own keys, not a per-row field on
+  // `photos` - thumbnailBlob moved to its own table (db.ts's v9 schema)
+  // precisely so a read like this one doesn't have to deserialize every
+  // cached blob just to test whether it's there. primaryKeys() reads only
+  // ids, never blob bytes.
+  const haveIds = new Set(await db.thumbnails.toCollection().primaryKeys())
+  const need = rows.filter((r) => !haveIds.has(r.id))
 
   const needed = need.length * APPROX_THUMB_BYTES
   const { ok, info } = await hasRoomFor(needed)
@@ -246,8 +280,22 @@ export async function downloadAllThumbnails(
       const entries = readStoredZip(await zipResp.arrayBuffer())
       const relevant = entries.filter((e) => needIds.has(e.name))
       if (relevant.length === 0) continue
-      await db.photos.bulkUpdate(
-        relevant.map((e) => ({ key: e.name, changes: { thumbnailBlob: new Blob([e.data]) } })),
+      // bulkPut, not bulkUpdate: a `thumbnails` row does not already exist
+      // for a photo whose blob has never been fetched, unlike the old
+      // `photos`-row-with-optional-field shape where the row was always
+      // there from metadata sync. bulkUpdate silently no-ops on a missing
+      // row, which would have made this a no-op for every first-time fetch.
+      //
+      // type: 'image/webp' explicitly - a Blob built from raw zip bytes has
+      // no type unless given one (unlike fetchThumbnailBlob's resp.blob(),
+      // which inherits it from the response's Content-Type header), and a
+      // typeless Blob renders as nothing in an <img src="blob:...">: found
+      // by inspecting IndexedDB directly after "download all" left every
+      // tile grey with zero console errors - the blob was there (real size,
+      // right bytes), just untyped. Derivatives are always webp - see
+      // CLAUDE.md and indexer.py's _derive_one.
+      await db.thumbnails.bulkPut(
+        relevant.map((e) => ({ id: e.name, blob: new Blob([e.data], { type: 'image/webp' }) })),
       )
       for (const e of relevant) {
         invalidateThumbnail(e.name)
@@ -305,8 +353,9 @@ export async function downloadAllThumbnails(
     }
     const entries = readStoredZip(await resp.arrayBuffer())
     const found = new Set(entries.map((e) => e.name))
-    await db.photos.bulkUpdate(
-      entries.map((e) => ({ key: e.name, changes: { thumbnailBlob: new Blob([e.data]) } })),
+    // bulkPut, not bulkUpdate - see the same note in fetchFrozenShards.
+    await db.thumbnails.bulkPut(
+      entries.map((e) => ({ id: e.name, blob: new Blob([e.data]) })),
     )
     for (const e of entries) invalidateThumbnail(e.name)
     // An id the server didn't return (no derivative yet, or a race with

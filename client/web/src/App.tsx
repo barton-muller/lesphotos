@@ -6,7 +6,7 @@ import { StatusBar } from './StatusBar'
 import { useIsNarrow } from './useIsNarrow'
 import { checkSession, login, logout } from './api'
 import { db } from './db'
-import { downloadAllThumbnails, syncTimeline } from './sync'
+import { downloadAllThumbnails, isLocalStorageError, syncTimeline } from './sync'
 
 // Single-column shell: a thin top bar, the grid, and a status bar. The left
 // panel is gone entirely - on a phone it cost more than half the width, and
@@ -48,6 +48,10 @@ function App() {
   // user in on the strength of the marker above - the grid is served from
   // IndexedDB, so it still works; the status bar says why it's not syncing.
   const [serverUnreachable, setServerUnreachable] = useState('')
+  // Set when a sync failed locally (an IndexedDB write, not a network
+  // call) - distinct from serverUnreachable, since the server answered
+  // fine and "Offline" would send the user looking at the wrong thing.
+  const [localStorageError, setLocalStorageError] = useState('')
   // Starts true, not false: the login-vs-app decision depends on an async
   // session check (below) - rendering the login form immediately would
   // flash it for a moment even when a valid auth-token cookie already
@@ -108,6 +112,7 @@ function App() {
     try {
       const result = await syncTimeline((done) => setSyncMessage(`${done} loaded`))
       setServerUnreachable('')
+      setLocalStorageError('')
       setSyncStatus('done')
       setSyncMessage(
         `${result.added} new, ${result.updated} updated, ${result.removed} removed, ${result.total} total`,
@@ -117,12 +122,16 @@ function App() {
       // A sync is also a live authorisation check, and the only place a
       // session can be found to have expired while the app is open. A 401
       // is the server explicitly rejecting the cookie, so drop the session
-      // properly; anything else is the server being unreachable, which is
-      // not grounds for logging anyone out.
+      // properly. A local IndexedDB write failure is a third case, distinct
+      // from both: the server was reachable and answered fine, so it must
+      // not be shown as "Offline" - only a genuine fetch/network failure
+      // means the server is unreachable.
       if (/\(401\)/.test(message)) {
         rememberSession(false)
         setLoggedIn(false)
         setLoginStatus('Session expired - please log in again')
+      } else if (isLocalStorageError(err)) {
+        setLocalStorageError(message)
       } else {
         setServerUnreachable(message)
       }
@@ -182,6 +191,7 @@ function App() {
     try {
       await db.photos.clear()
       await db.fullres.clear()
+      await db.thumbnails.clear()
     } catch {
       // A failed cache clear must not strand someone logged in.
     }
@@ -262,14 +272,13 @@ function App() {
   }, [loggedIn])
 
   const photoCount = useLiveQuery(() => db.photos.count(), [], null)
-  // Live-queried the same way: a bulk download or a lazily-fetched tile
-  // both write to db.photos, and this is what lets the status bar count up
-  // in real time without either code path having to know the bar exists.
-  const thumbnailCount = useLiveQuery(
-    () => db.photos.filter((p) => p.thumbnailBlob !== undefined).count(),
-    [],
-    null,
-  )
+  // A bulk download or a lazily-fetched tile both write to db.thumbnails
+  // (its own table since db.ts's v9 schema), and this is what lets the
+  // status bar count up in real time without either code path having to
+  // know the bar exists. An indexed count here, not a filter over
+  // db.photos - that used to deserialize every cached thumbnail blob just
+  // to test its presence, on every single write to the photos table.
+  const thumbnailCount = useLiveQuery(() => db.thumbnails.count(), [], null)
   // Still needed by Timeline: the scrubber rail collapses to a touch handle
   // on a phone even though the sidebar it used to share space with is gone.
   const narrow = useIsNarrow()
@@ -563,6 +572,7 @@ function App() {
         downloadingThumbs={downloadingThumbs}
         thumbDownloadMessage={thumbDownloadMessage}
         offline={serverUnreachable !== ''}
+        localStorageError={localStorageError}
       />
     </div>
   )

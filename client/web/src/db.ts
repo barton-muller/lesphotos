@@ -12,11 +12,17 @@ import Dexie, { type EntityTable } from 'dexie'
 /**
  * Everything about a photo except its image data.
  *
- * The grid lays out from this alone. Keeping it separate from `thumbnailBlob`
- * is what lets the Timeline load all ~28,000 rows at once (a couple hundred
- * bytes each) while thumbnails stream in per visible row - see thumbnails.ts.
+ * The grid lays out from this alone. `thumbnailBlob` used to live inline on
+ * this same row (see v9's migration note below) - that made every full-table
+ * read (Timeline's live query, a routine foreground resync's cachedById
+ * diff) deserialize every cached thumbnail just to discard it a moment
+ * later, which was the actual cost behind both a slow Timeline load and a
+ * slow "check for new photos" at the real ~28,000-photo/user target. Blobs
+ * now live in their own `thumbnails` table, so `CachedPhoto` itself is
+ * metadata-only and this alias is just for readability at call sites that
+ * only ever wanted the metadata shape.
  */
-export type PhotoMeta = Omit<CachedPhoto, 'thumbnailBlob'>
+export type PhotoMeta = CachedPhoto
 
 export interface CachedPhoto {
   id: string
@@ -36,10 +42,6 @@ export interface CachedPhoto {
   // with .where('favorite').equals(...) - matches server/appdb's own
   // `favorite INTEGER` column for the same reason.
   favorite: 0 | 1
-  // Optional: a metadata-only sync stores the row without pixels and the
-  // grid fills them in as tiles come into view (see thumbnails.ts). A row
-  // that has one is offline-capable; one that does not needs the server.
-  thumbnailBlob?: Blob
   width: number
   height: number
   // Videos render as a normal tile with a play badge and duration; the
@@ -62,9 +64,18 @@ export interface CachedFullRes {
   lastAccessed: number
 }
 
+// A row exists here only once its pixels have actually been fetched - see
+// thumbnails.ts. A photo with no row here yet is not an error, just not
+// downloaded; the grid fetches it lazily as its tile scrolls into view.
+export interface CachedThumbnail {
+  id: string
+  blob: Blob
+}
+
 export const db = new Dexie('lesphotos') as Dexie & {
   photos: EntityTable<CachedPhoto, 'id'>
   fullres: EntityTable<CachedFullRes, 'id'>
+  thumbnails: EntityTable<CachedThumbnail, 'id'>
 }
 
 db.version(1).stores({
@@ -181,3 +192,74 @@ db.version(8)
   .upgrade(async (tx) => {
     await tx.table('photos').clear()
   })
+
+// v9: thumbnailBlob moves out of `photos` into its own `thumbnails` table,
+// keyed by the same id, so a metadata-only read (Timeline's live query, a
+// routine foreground resync's cachedById diff, the status bar's counts)
+// never deserializes image bytes off IndexedDB - see CLAUDE.md's
+// "thumbnailBlob is optional" invariant, which this makes structurally
+// true rather than a JS-side convention a full-table read still paid for.
+//
+// Clearing rather than migrating existing blobs across, same reasoning as
+// v4-v8: an in-place copy would mean reading all ~28,000 blobs into this
+// tab's JS heap during the upgrade transaction, on whatever device happens
+// to run it - including a phone. Letting the next sync (cheap, JSON-only
+// after this fix) repopulate `photos` and each tile lazily refetch its own
+// thumbnail costs a one-time re-download, not a migration bug surface.
+db.version(9)
+  .stores({
+    photos: 'id, moment, date, favorite',
+    fullres: 'id, lastAccessed',
+    thumbnails: 'id',
+  })
+  .upgrade(async (tx) => {
+    await tx.table('photos').clear()
+  })
+
+// A cheap "something changed" signal for `photos`, bumped by every
+// create/update/delete regardless of whether row COUNT changed. Timeline.tsx
+// reads this table in chunks now (see its own comment) rather than through
+// a single useLiveQuery(() => db.photos.toArray()), so it needs its own
+// trigger to know when to re-read - a plain row count isn't enough, since a
+// rename, favorite toggle, or hasMotion flip changes a row's contents
+// without changing how many rows exist, and CLAUDE.md's own sync.ts
+// diffing exists precisely to catch that class of change.
+//
+// Dexie's requestBuild change tracking (the same mechanism useLiveQuery
+// subscribes to) requires the `dexie-observable` addon to be enabled, which
+// this app doesn't use - so this is a plain manual counter driven by
+// Dexie's synchronous per-write hooks, wrapped in Dexie's own event emitter
+// so components can subscribe with useSyncExternalStore instead of
+// useLiveQuery (which needs the addon to see table-level changes at all).
+const photosVersionListeners = new Set<() => void>()
+let photosVersionValue = 0
+
+export function subscribePhotosVersion(listener: () => void): () => void {
+  photosVersionListeners.add(listener)
+  return () => photosVersionListeners.delete(listener)
+}
+
+export function getPhotosVersion(): number {
+  return photosVersionValue
+}
+
+// Dexie's per-row hooks fire once per row even inside a bulkPut/bulkDelete,
+// so a 26,000-row sync would otherwise mean 26,000 individual notifications.
+// Coalesced with a "notify pending" flag instead: any number of hook firings
+// within the same microtask queue collapse into one bump and one round of
+// listener calls, since all any subscriber needs to know is "changed since
+// I last read", not how many times or how.
+let notifyScheduled = false
+function scheduleBump() {
+  if (notifyScheduled) return
+  notifyScheduled = true
+  queueMicrotask(() => {
+    notifyScheduled = false
+    photosVersionValue++
+    for (const listener of photosVersionListeners) listener()
+  })
+}
+
+db.photos.hook('creating', scheduleBump)
+db.photos.hook('updating', scheduleBump)
+db.photos.hook('deleting', scheduleBump)

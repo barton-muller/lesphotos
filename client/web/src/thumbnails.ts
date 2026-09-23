@@ -1,5 +1,5 @@
 import { thumbUrl } from './api'
-import { db } from './db'
+import { db, type CachedThumbnail } from './db'
 
 /**
  * Object-URL store for thumbnails, loaded on demand rather than up front.
@@ -130,10 +130,31 @@ function isMissing(id: string): boolean {
 
 function evictIfNeeded() {
   if (entries.size <= maxUrls) return
-  // Sort by access order and drop the coldest quarter, so eviction runs
-  // rarely rather than on nearly every insert once the cache is full.
-  const sorted = [...entries.entries()].sort((a, b) => a[1].seq - b[1].seq)
-  const drop = Math.max(1, Math.floor(entries.size - maxUrls * 0.75))
+  // Never evict an id a mounted tile still wants. useThumbnail peeks its
+  // object URL synchronously during render (deliberately, so scrolling back
+  // doesn't flash a placeholder - see useThumbnail.ts), so revoking a
+  // waited-on entry here breaks an already-rendered <img src="blob:...">
+  // out from under it: nothing forces that component to re-render and
+  // re-peek, so it keeps pointing at a dead URL and shows the browser's
+  // broken-image icon until some unrelated state change happens to redraw
+  // it. Reproduced during a fast fling: prefetch's ~72-tile runway inserts
+  // enough new entries between two visits to the same tile to push it out
+  // of pure-LRU order while it's still on screen.
+  const candidates = [...entries.entries()].filter(([id]) => !waiters.has(id))
+  if (candidates.length === 0) {
+    // Every resident entry is currently on screen - nothing is safe to
+    // evict this pass. Bounded, not a leak: `waiters` shrinks as tiles
+    // unmount (releaseThumbnail), and maxUrls is already sized off the
+    // same visible-tile count that bounds waiters.size (setThumbnailBudget's
+    // 1.5x runway assumes it covers the mounted set), so entries.size can
+    // only exceed maxUrls by however much is genuinely visible right now.
+    return
+  }
+  // Sort by access order and drop the coldest quarter of what's actually
+  // evictable, so eviction runs rarely rather than on nearly every insert
+  // once the cache is full.
+  const sorted = candidates.sort((a, b) => a[1].seq - b[1].seq)
+  const drop = Math.max(1, Math.floor(candidates.length - maxUrls * 0.75))
   for (let i = 0; i < drop; i++) {
     const [id, entry] = sorted[i]
     URL.revokeObjectURL(entry.url)
@@ -203,6 +224,63 @@ export function releaseThumbnail(id: string) {
 }
 
 
+/**
+ * Coalesces same-tick db.thumbnails.get(id) calls into one bulkGet.
+ *
+ * The initial mount asks for every visible tile plus the prefetch runway
+ * (~150+ ids) within the same render pass, and each used to open its own
+ * IndexedDB transaction. Measured on a real ~26,000-photo Safari session:
+ * 164 individual get() calls spread across a ~10s stall with the main
+ * thread completely idle between them - Safari appears to serialize
+ * concurrent IndexedDB transactions against the same store far less
+ * efficiently than Chrome does, so a burst of one-row reads that's
+ * essentially free in Chrome became the actual bottleneck here. Batching
+ * into a single bulkGet - one transaction regardless of how many ids
+ * arrive in the same tick - sidesteps that entirely.
+ */
+const pendingGets = new Map<string, { resolve: (row: CachedThumbnail | undefined) => void }[]>()
+let getFlushScheduled = false
+
+function batchedGetThumbnail(id: string): Promise<CachedThumbnail | undefined> {
+  return new Promise((resolve) => {
+    const waiting = pendingGets.get(id)
+    if (waiting) {
+      waiting.push({ resolve })
+      return
+    }
+    pendingGets.set(id, [{ resolve }])
+    if (!getFlushScheduled) {
+      getFlushScheduled = true
+      queueMicrotask(flushPendingGets)
+    }
+  })
+}
+
+function flushPendingGets() {
+  getFlushScheduled = false
+  const ids = [...pendingGets.keys()]
+  // A COPY, not an alias: pendingGets.clear() below empties the same Map
+  // object a plain `const resolvers = pendingGets` would still be pointing
+  // at, so every resolvers.get() after the clear silently returned
+  // undefined and no waiter was ever resolved - found by tracing a
+  // never-settling promise all the way back to this line; nothing threw,
+  // nothing logged, because "resolve nothing" isn't an error, just silence.
+  const resolvers = new Map(pendingGets)
+  pendingGets.clear()
+  db.thumbnails
+    .bulkGet(ids)
+    .then((rows) => {
+      rows.forEach((row, i) => {
+        for (const w of resolvers.get(ids[i]) ?? []) w.resolve(row)
+      })
+    })
+    .catch(() => {
+      for (const list of resolvers.values()) {
+        for (const w of list) w.resolve(undefined)
+      }
+    })
+}
+
 export function loadThumbnailUrl(
   id: string,
   { allowNetwork = true }: { allowNetwork?: boolean } = {},
@@ -214,10 +292,9 @@ export function loadThumbnailUrl(
   const pending = inflight.get(id)
   if (pending) return pending
 
-  const promise = db.photos
-    .get(id)
+  const promise = batchedGetThumbnail(id)
     .then(async (row) => {
-      if (!row?.thumbnailBlob) {
+      if (!row?.blob) {
         // No blob on device yet. Fetch it and keep it, so a device that
         // has only synced metadata fills in as you scroll instead of
         // needing the whole library downloaded up front.
@@ -239,8 +316,9 @@ export function loadThumbnailUrl(
         }
         // Store it so the next open reads from IndexedDB, and so a photo
         // viewed once is offline-capable thereafter. A write failure (quota)
-        // still yields a usable URL for this session.
-        db.photos.update(id, { thumbnailBlob: blob }).catch(() => {})
+        // still yields a usable URL for this session. put, not update - a
+        // thumbnails row doesn't already exist on a first-time fetch.
+        db.thumbnails.put({ id, blob }).catch(() => {})
         const already = entries.get(id)
         if (already) {
           already.seq = ++seqCounter
@@ -257,7 +335,7 @@ export function loadThumbnailUrl(
         already.seq = ++seqCounter
         return already.url
       }
-      const url = URL.createObjectURL(row.thumbnailBlob)
+      const url = URL.createObjectURL(row.blob)
       entries.set(id, { url, seq: ++seqCounter })
       evictIfNeeded()
       return url
