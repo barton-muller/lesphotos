@@ -267,9 +267,14 @@ work, not a fresh port to hunt for each time. Reuse them:
 The server is started at boot by a DSM **Task Scheduler** triggered task (Control Panel →
 Task Scheduler, event Boot-up), but Task Scheduler has no "kill this task" button — the
 UI can re-run the start script but cannot stop a process it started. So in practice,
-restarting is done entirely from an SSH session, never by logging into the DSM web UI:
+restarting is done entirely from an SSH session, never by logging into the DSM web UI.
+
+**SSH as `alice@nas`** — not `bob@nas`, which has no account on the NAS and just
+hangs on password auth with no way to fail cleanly.
 
 ```sh
+ssh alice@nas
+
 pkill -f "uvicorn api:root_app"
 
 UV=/var/services/homes/Alice/.local/bin/uv /bin/bash /volume1/lesphotos/app/deploy/run.sh \
