@@ -264,13 +264,24 @@ work, not a fresh port to hunt for each time. Reuse them:
 
 ### Restarting the server on the NAS (NAS)
 
+> **Stale as of 2026-09-24 — mid-migration.** The server (and soon the watcher) is
+> moving from running as `Alice` to a dedicated non-admin `lesphotos` service account,
+> for real file-permission isolation between family members' libraries (see
+> `docs/known-issues.md`'s "Remaining rollout" entry for the full story and what's
+> left). The commands below still describe the *old* `Alice`-based restart and will
+> stop being accurate once Task Scheduler is updated to run as `lesphotos` — check
+> `docs/known-issues.md` first if this section and reality disagree.
+
 The server is started at boot by a DSM **Task Scheduler** triggered task (Control Panel →
 Task Scheduler, event Boot-up), but Task Scheduler has no "kill this task" button — the
 UI can re-run the start script but cannot stop a process it started. So in practice,
 restarting is done entirely from an SSH session, never by logging into the DSM web UI.
 
 **SSH as `alice@nas`** — not `bob@nas`, which has no account on the NAS and just
-hangs on password auth with no way to fail cleanly.
+hangs on password auth with no way to fail cleanly. (`lesphotos` itself cannot SSH in at
+all — DSM restricts SSH login to the `administrators` group with no per-user override —
+so commands meant to run *as* `lesphotos` go through `sudo -u lesphotos <command>` from
+this same `alice` session, not a separate login.)
 
 ```sh
 ssh alice@nas

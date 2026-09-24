@@ -4,78 +4,145 @@ Bugs observed in real use, not yet root-caused or fixed. One entry per issue: wh
 observed, what was expected, and any leads. Move an entry to a commit message (and delete
 it here) once it's actually fixed — this file is a queue, not a changelog.
 
-## Favorite/star toggling does not sync across devices — permissions fix in progress
+## Remaining rollout: `lesphotos` service account (favoriting fix is done)
 
-**Observed 2026-09-24, root-caused same day**: starring a photo on one device did not
-reliably show up as starred on another. The delta-sync mechanism itself is confirmed
-working correctly (tested directly against `/favorite` + `/timeline?since=` on the NAS)
-— the actual bug is filesystem permissions, not sync logic.
+**Fixed and verified 2026-09-24**: starring a photo silently failed with a 500 whenever
+the photo was one the server process couldn't read — see "Favorite/star toggling
+500'd" below for the full root cause and fix. The `Bob/Photos` side is done and
+confirmed working end-to-end (`POST /favorite` on a real, previously-broken photo now
+returns `200`). This entry tracks what's left to finish the rollout:
 
-**Root cause**: the server process (running as DSM user `Alice`) cannot read files
-owned by a different DSM user (e.g. `Bob`) with mode `700` — exactly what phone
-photos get by default from the backup app. `POST /favorite` calls
-`db.content_hash_of(path)`, which does a plain `open(path, "rb")` — this raises
-`PermissionError`, which FastAPI turns into an opaque 500, so the star silently never
-saves anywhere. Confirmed live: `manage.py list-users` showed "17 unreadable" for
-`bob`'s library; reproduced the exact 500 on a real recently-uploaded photo.
+- [ ] **`Alice/Photos` still needs the same treatment as `Bob/Photos`**: recursive
+      `chgrp lesphotos-service`, then a *separate* recursive `chmod` pass (`g+rx` for
+      directories, `g+r` for files — `chgrp` alone does not grant the group anything if
+      the mode bits' group slot is `---`, which phone-uploaded files are by default; see
+      the fix writeup below for why this is two passes, not one). `Alice/Photos` has no
+      stray ACL (confirmed `synoacltool -get` says "It's Linux mode"), so it should be a
+      clean run with no ACL cleanup step needed, unlike the false starts hit on `Bob`.
+      Also still needed: `.lesphotos/appdb.sqlite3` (+ `-wal`/`-shm`) and `stars.json`
+      need `chmod g+w`, not just `g+r` — the database needs to be written to, not just
+      read.
+- [ ] **Point the watcher at `lesphotos`.** Still runs as `root` (ad hoc, started via
+      `sudo`). Needs the same account switch the API server already got. Since it's a
+      separate daemon (see `server/watcher.py`'s own docstring for why), this is a
+      second, independent restart from the API server's.
+- [ ] **Task Scheduler entries.** Everything above was done via manual `sudo -u
+      lesphotos <command>` over SSH — nothing survives a reboot yet. DSM Task
+      Scheduler's own "Run as" user dropdown does list `lesphotos` (confirmed), so both
+      the API server task and the watcher task need their "Run as" changed from
+      `alice`/whatever they're currently set to, over to `lesphotos`. See
+      `deploy/README.md`'s restart section for the exact commands each task should run.
+- [ ] Update `deploy/README.md` once Task Scheduler is updated, so the documented
+      restart procedure matches reality (it currently still describes restarting as
+      `alice`/root via plain `sudo`, not `sudo -u lesphotos`).
 
-Individual photo files are correctly private (`700`, owner-only) — this is NOT a
-"photos are too open" bug, the opposite: the server has too little access to files it
-legitimately needs to serve on behalf of their owner. Separately, this investigation
-also found `Bob/Photos` and `Alice/Photos` were group-owned by DSM's own
-`SynologyPhotos` group (auto-created by the Synology Photos app for its own
-cross-account "Shared Space" feature, not something configured deliberately) — meaning
-any DSM user in that group (every family member) could browse another's `Photos/`
-folder directly, bypassing the app entirely. Not used deliberately, closed as part of
-this fix.
+**Deliberately out of scope**: `Alice` (and any other DSM admin) retains implicit
+access to every file on the NAS regardless of any of the above — inherent to the DSM
+admin role, not fixable by chmod/group/ACL. Accepted: the goal was closing access
+between ordinary (non-admin) family accounts, not stopping admins.
 
-**Approach chosen**: a dedicated `lesphotos` DSM service account (non-admin — DSM
-admins bypass all file permissions, so making it admin would defeat the point, and was
-tried and reverted), granted access via a **plain Unix group**
-(`lesphotos-service`, containing only `lesphotos`) set as each `Photos/` folder's
-group, `chmod 2775` (setgid, so new files inherit the group automatically). **DSM's
-ACL system (`synoacltool`) was tried first and abandoned** — it produced confusing,
-undocumented behavior (an `owner:*:allow` entry did not grant the file's actual owner
-read access even when explicitly named by uid; `-enforce-inherit` did not propagate a
-folder's ACL to existing files as its name implies) that consumed significant
-debugging time without a working result. `synoacltool -add` was also found to
-*replace* a file's classic Unix mode bits (e.g. dropping a file to `0000`) rather than
-add to them, which is a sharp edge worth remembering if ACL is ever revisited — restore
-with `chmod` + `synoacltool -del <index>` for every added entry, not just one.
+## Favorite/star toggling 500'd — root cause and fix (2026-09-24)
 
-SSH access is DSM-restricted to the `administrators` group with no per-user override
-(confirmed via DSM's own service dialog), so `lesphotos` cannot log in via SSH itself —
-this is fine and expected, since it never needs to: the account only needs to *run
-processes*, launched either via DSM Task Scheduler's own "Run as" user (confirmed
-`lesphotos` is selectable there) or via `sudo -u lesphotos <command>` from an admin's
-own SSH session.
+**Observed**: starring a photo on one device did not show up on another. The delta-sync
+mechanism itself was confirmed working correctly first (tested directly against
+`/favorite` + `/timeline?since=` on the NAS) — the actual bug was filesystem
+permissions, not sync logic, so this took real digging to find.
 
-**Status as of 2026-09-24**:
-- [x] `lesphotos` DSM account created (non-admin, `users` group only)
-- [x] `lesphotos-service` Unix group created, `lesphotos` added as its only member
-- [x] `Bob/Photos` fully migrated: recursive `chgrp lesphotos-service`, top folder
-      restored to clean `drwxrwsr-x` (`2775`) after an earlier ACL experiment had left
-      it in a broken ACL-only state (`d-----S---+`, unreadable by everyone including
-      the owner) — restored via `synoacltool -del <index>` + `chmod 2775`. Verified:
-      `lesphotos` can read a previously-`700` file via group permission alone.
-- [ ] **`Alice/Photos` still needs the same recursive `chgrp lesphotos-service` sweep**
-      (command ready, not yet run — user wants to verify the `Bob` side works
-      end-to-end first). Run: `sudo nohup find /volume1/homes/Alice/Photos -exec chgrp
-      lesphotos-service {} \; > /volume1/lesphotos/data/chgrp-alice.log 2>&1 &
-      disown` (background — do not run in foreground / do not Ctrl-C, an interrupted
-      sweep leaves the tree in a partially-migrated, inconsistent state, which happened
-      once already on the `Bob` sweep and had to be finished via a second pass).
-      `Alice/Photos` currently has no stray ACL (confirmed "It's Linux mode"), so no
-      cleanup step should be needed after the sweep, unlike `Bob/Photos`.
-- [ ] Point the running API server and watcher processes at `lesphotos` instead of
-      `Alice`/`root` (Task Scheduler "Run as", or `sudo -u lesphotos` for manual runs).
-      Not yet done — current production processes still run as `Alice` (server) and
-      `root` (watcher).
-- [ ] Re-verify the original bug (favorite a recent phone photo) is actually fixed
-      end-to-end once the server process itself runs as `lesphotos`.
-- [ ] Remove this entry once verified fixed and the above are all checked off.
+**Root cause**: the server process (running as DSM user `Alice`) could not read files
+owned by a *different* DSM user (e.g. `Bob`) with mode `700` — exactly what phone
+photos get by default from the Mobile Backup app. `POST /favorite` calls
+`db.content_hash_of(path)`, a plain `open(path, "rb")`, which raised `PermissionError`
+→ an opaque FastAPI 500 → the star silently never saved anywhere. Confirmed live:
+`manage.py list-users` showed "17 unreadable" for `bob`'s library; reproduced the
+exact 500 on a real recently-uploaded photo before any fix.
 
-**Deliberately out of scope for this fix**: `Alice` and other DSM admins retain
-implicit access to every file on the NAS regardless of any of the above — that's
-inherent to the DSM admin role, not fixable by chmod/group/ACL. Accepted: the goal was
-closing access between ordinary (non-admin) family accounts, not stopping admins.
+Individual photo files being `700`/owner-only is *correct*, not the bug — the server
+had too little access to files it legitimately needed to serve on behalf of their
+owner, not the reverse. Separately, this investigation also found `Bob/Photos` and
+`Alice/Photos` were group-owned by DSM's own `SynologyPhotos` group (auto-created by
+the Synology Photos app for its own "Shared Space" feature, not something either of us
+configured deliberately) — meaning any DSM user in that group (every family member)
+could browse another's `Photos/` folder directly over SMB/File Station/SSH, bypassing
+the app entirely. Confirmed nobody uses that DSM feature; closed as part of this fix.
+
+### Approach: a dedicated `lesphotos` service account, plain Unix group, own venv
+
+A new DSM account, `lesphotos` — **non-admin** (DSM admins bypass all file permissions
+outright, so making it admin was tried once, found to defeat the entire point, and
+reverted before it was used for anything) — now runs the API server (and will run the
+watcher). Filesystem access is granted via a **plain Unix group**,
+`lesphotos-service`, containing only `lesphotos`, set as each `Photos/` folder's group.
+
+**Two chmod passes were needed per library, not one** — this was the single biggest
+time-sink of the whole fix, worth remembering clearly:
+1. `chgrp lesphotos-service` on every file/folder, recursively.
+2. A *separate* `chmod g+rx` (directories) / `g+r` (files) pass — because the existing
+   mode bits on phone-uploaded files were `700` (group slot `---`), `chgrp` alone
+   changes *which* group owns the file, not *what that group can do*. Skipping step 2
+   is why the very first end-to-end retest after step 1 still 500'd.
+3. On top of that, `.lesphotos/appdb.sqlite3` (+ its `-wal`/`-shm` siblings) and
+   `stars.json` specifically needed `g+w` (not just `g+r`) — the app writes to these,
+   not just reads them, which the earlier passes (aimed at photo files) didn't cover.
+
+**`.venv`, `uv`, and `node_modules` all had the same class of bug**: each was
+originally created by `Alice`, and critically, `uv`'s own downloaded Python interpreter
+lives by default under the *invoking user's home directory*
+(`~/.local/share/uv/python/...`) — so even once `lesphotos` had access to the project
+checkout itself, `.venv/bin/python` was a symlink into `Alice`'s personal home, which
+`lesphotos` had no reason to ever access. Fix: `lesphotos` built its own, fully
+independent `.venv` (`sudo -u lesphotos uv sync` after `rm -rf .venv`) and its own
+`node_modules` (same `rm -rf` + reinstall pattern) — no shared dependency on any one
+person's home directory. `uv` itself (the launcher binary) also needed to stop being a
+personal-home-directory binary — copied to `/usr/local/bin/uv` (`755`, world-executable,
+matching how `node`/`npm` already lived there) rather than granting `lesphotos` access
+into `Alice`'s `~/.local/bin/`.
+
+**`deploy/lesphotos.env` (the file holding `LESPHOTOS_SECRET`)** was `600 Alice` —
+`lesphotos` couldn't read it to start the server at all. Fixed by transferring
+ownership to `lesphotos` (`chown lesphotos`, kept at `600`) rather than widening its
+group — this is a session-signing secret, so narrowing access to exactly the account
+that needs it (and removing `Alice`'s own access, which he no longer needs once he's
+not the one running the server) was the right call, not a compromise.
+
+**DSM's ACL system (`synoacltool`) was tried first and abandoned** in favor of the
+above plain-Unix-group approach — worth documenting clearly since it cost real time and
+might tempt a future fix attempt to reach for it again:
+- An `owner:*:allow` ACL entry did **not** grant the file's actual owner read access,
+  even after also trying an explicit `user:<owner-name>:allow` entry naming the correct
+  uid directly. Root cause was never found; `synoacltool -check`/`-get-perm` confirmed
+  the owner had zero effective permission despite the ACL clearly listing an allow
+  entry for them.
+- `-enforce-inherit` did **not** propagate a folder's ACL down to files that already
+  existed inside it, despite that being the documented purpose of the flag.
+- `synoacltool -add` on an individual **file** *replaces* its classic Unix mode bits
+  rather than adding to them — observed dropping a file straight to mode `0000`
+  (unreadable by literally everyone, including root via plain `cat`, though `sudo`
+  still worked) the moment the first ACL entry was added.
+- The same replacement behavior hit a **directory** too: `/volume1/homes/Bob/Photos`
+  itself was left in a broken `d-----S---+` state (no usable access for anyone) after
+  an early `synoacltool -add` experiment on it — had to be recovered with
+  `synoacltool -del <index>` (once per added entry) followed by a plain `chmod 2775`
+  to restore normal owner/group/other bits.
+- DSM's GUI "Convert to Windows ACL" wizard (Control Panel → Shared Folder → Edit →
+  Permissions) was found and *not* used, deliberately — it's folder-wide and marked
+  "irreversible" by DSM's own dialog; the ACL problems above were reason enough not to
+  risk it on real data mid-investigation.
+- One thing the GUI *did* get right, on the `lesphotos` shared folder specifically
+  (the app's own code checkout, not a photo library): granting `lesphotos` Read/Write
+  via Control Panel → Shared Folder → `lesphotos` → Edit → Permissions correctly
+  propagated down to files that already existed, unlike every manual `synoacltool -add`
+  attempt on the photo libraries. Why the GUI succeeded where the CLI kept failing was
+  never fully explained — plausibly a different, more thorough code path DSM's own
+  wizard takes that `-add`/`-enforce-inherit` don't.
+
+**SSH access is DSM-restricted to the `administrators` group, with no per-user
+override** (confirmed directly via DSM's own SSH service dialog text) — so `lesphotos`
+cannot log in over SSH itself, and making it an admin (which *would* grant SSH) was
+exactly the wrong fix, per above. This is fine: the account only ever needs to *run
+processes*, not have an interactive login. Two ways to do that without SSH access of
+its own: DSM Task Scheduler's "Run as" user (confirmed `lesphotos` appears in that
+dropdown), or `sudo -u lesphotos <command>` from an admin's own already-authenticated
+SSH session — both were used interchangeably during setup and testing.
+
+See "Remaining rollout" above for what's left (`Alice/Photos`, the watcher, and Task
+Scheduler still need the same treatment).

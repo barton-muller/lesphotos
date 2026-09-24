@@ -183,6 +183,13 @@ one destination folder, so a photo becomes visible without a full library rescan
 
 ## Making changes
 
+> **Stale as of 2026-09-24 — mid-migration to a `lesphotos` service account.** The
+> commands below still build/run everything as `Alice` (and the watcher separately
+> as `root`). Both are moving to a dedicated non-admin `lesphotos` account for real
+> per-user file isolation — see `docs/known-issues.md`'s "Remaining rollout" entry
+> for the current status and exact commands actually in use right now, which may be
+> ahead of what's written here.
+
 Edit, commit, and push on the Mac as usual. Then, over SSH as `alice@nas` (see
 CLAUDE.md's "SSH login user" note — `bob@nas` has no account):
 
