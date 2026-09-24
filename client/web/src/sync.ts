@@ -289,6 +289,22 @@ export async function syncTimeline(
   return result
 }
 
+// The manual escape hatch for "delta sync missed something" - which
+// shouldn't happen (every write bumps changed_seq), but did in practice
+// while developing the moment_date fix: a value changed server-side via a
+// direct DB backfill rather than through db.bump_changed_seq on the normal
+// write path, so an already-cached device's delta sync had no seq gap to
+// notice. Re-diffs every row against the server like a first-time sync,
+// without needing a logout/login or manually clearing IndexedDB.
+export async function forceFullSync(
+  onProgress?: (done: number, total: number) => void,
+): Promise<SyncResult> {
+  const result = await fullRelist(onProgress)
+  const maxSeq = await fetchTimelineMaxSeq()
+  writeLastSeq(maxSeq)
+  return result
+}
+
 // The explicit, expensive action: download every thumbnail so the library
 // is fully browsable offline. Everything else about the app works from
 // metadata plus whichever thumbnails have actually been looked at - this

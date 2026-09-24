@@ -21,8 +21,17 @@ from datetime import date
 # date_prefix_str), independent of however many digit groups it captures.
 _PATTERNS = (
     re.compile(r"^((\d{4})-(\d{2})-(\d{2}))(?:-.*)?$"),
-    re.compile(r"^((\d{4})-(\d{2}))$"),
+    re.compile(r"^((\d{4})-(\d{2}))(?:-.*)?$"),
 )
+
+# Exact "YYYY-MM" with nothing after it - deliberately stricter than
+# _PATTERNS[1] above, which now also accepts a "-Label" suffix so a moment
+# created directly from a bare month bucket (date_prefix_str("2026-08") +
+# "-london-united-kingdom") still parses to a real date instead of NULL.
+# is_month_only_prefix needs the narrow, no-label version: a bucket that
+# already carries a label is a real moment, not raw material that still
+# needs rebalance_month_bucket_dates tracking its newest photo.
+_BARE_MONTH_ONLY = re.compile(r"^(\d{4})-(\d{2})$")
 
 _BARE_YEAR = re.compile(r"^(\d{4})$")
 _BARE_MONTH = re.compile(r"^(\d{2})$")
@@ -76,7 +85,7 @@ def is_month_only_prefix(name):
     recomputed as photos arrive - see
     indexer.py's rebalance_month_bucket_dates.
     """
-    return _PATTERNS[1].match(name) is not None
+    return _BARE_MONTH_ONLY.match(name) is not None
 
 
 def is_month_bucket(parent_name, grandparent_name):

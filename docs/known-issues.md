@@ -4,32 +4,6 @@ Bugs observed in real use, not yet root-caused or fixed. One entry per issue: wh
 observed, what was expected, and any leads. Move an entry to a commit message (and delete
 it here) once it's actually fixed — this file is a queue, not a changelog.
 
-## Moment `2026-09-Lancaster-Glasgow` sorts to the bottom of the timeline (before 2001)
-
-**Observed 2026-09-24**: created a new moment named `Lancaster-Glasgow` from photos
-originally in the `2026/2026-09/` month bucket. The resulting moment only shows at the
-very bottom of the timeline, below every dated moment back to 2001 — i.e. sorted as if
-it had no date at all, rather than appearing in September 2026 where it belongs.
-
-**Suspected connection**: this looks like the same class of bug CLAUDE.md documents
-being fixed for bare month buckets (`indexer.rebalance_month_bucket_dates`,
-`moment_dates.is_month_bucket`) — a folder with no day-level date prefix sorting last
-under `ORDER BY moment_date DESC`. The new moment's name (`Lancaster-Glasgow`, no
-`YYYY-MM-DD-` prefix visible in the folder name as typed) suggests `moment_date` may be
-ending up `NULL` for it, which is exactly the "sorts last" behavior described in
-`server/api.py`'s `/timeline` docstring and `media_schema.sql`'s `moment_date` comment.
-
-**Leads for whoever picks this up**:
-- Check what `moment_date` actually got stored for this moment's photos — likely via
-  whatever endpoint created it (`/moments/create` in `api.py`, or a rename that changed
-  the label without a `new_date`).
-- `_with_date_prefix` (`reorganize.py`) and `date_prefix_str` (`api.py`) are the two
-  places that decide whether a new folder name gets a date prefix — check whether the
-  moment-creation UI path that made this moment actually supplied a date, or whether the
-  create flow that produced `Lancaster-Glasgow` skipped it.
-- Reproduce directly: create a moment from a bare month-bucket folder via the same UI
-  flow used here, then check `SELECT moment_date FROM media WHERE ...` for its photos.
-
 ## Favorite/star toggling does not sync across devices — permissions fix in progress
 
 **Observed 2026-09-24, root-caused same day**: starring a photo on one device did not

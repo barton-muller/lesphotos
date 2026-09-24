@@ -6,7 +6,7 @@ import { StatusBar } from './StatusBar'
 import { useIsNarrow } from './useIsNarrow'
 import { checkSession, login, logout } from './api'
 import { db } from './db'
-import { downloadAllThumbnails, isLocalStorageError, syncTimeline } from './sync'
+import { downloadAllThumbnails, forceFullSync, isLocalStorageError, syncTimeline } from './sync'
 
 // Single-column shell: a thin top bar, the grid, and a status bar. The left
 // panel is gone entirely - on a phone it cost more than half the width, and
@@ -104,13 +104,15 @@ function App() {
   // library size (JSON, never image bytes) and what makes the grid appear
   // incrementally rather than after every page has landed. Thumbnail PIXELS
   // are runDownloadAll's job, triggered explicitly, never implicitly here.
-  async function runSync() {
+  async function runSync(force = false) {
     if (syncing.current) return
-    if (Date.now() - lastSyncedAt.current < MIN_RESYNC_INTERVAL_MS) return
+    if (!force && Date.now() - lastSyncedAt.current < MIN_RESYNC_INTERVAL_MS) return
     syncing.current = true
     setSyncStatus('syncing')
     try {
-      const result = await syncTimeline((done) => setSyncMessage(`${done} loaded`))
+      const result = await (force ? forceFullSync : syncTimeline)((done) =>
+        setSyncMessage(`${done} loaded`),
+      )
       setServerUnreachable('')
       setLocalStorageError('')
       setSyncStatus('done')
@@ -518,6 +520,18 @@ function App() {
                 style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px', whiteSpace: 'nowrap' }}
               >
                 Sync now
+              </button>
+              <button
+                type="button"
+                data-testid="full-resync"
+                title="Re-fetch and re-diff every photo's metadata against the server, ignoring the delta-sync watermark - use this if a server-side change (e.g. a direct DB fix) didn't show up via the normal sync"
+                onClick={() => {
+                  setMenuOpen(false)
+                  runSync(true)
+                }}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px', whiteSpace: 'nowrap' }}
+              >
+                Full resync
               </button>
               <button
                 type="button"
