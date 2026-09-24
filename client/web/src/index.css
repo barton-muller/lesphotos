@@ -20,6 +20,7 @@
   --radius: 8px;
   --sidebar-width: 220px;
   --selection: #205ea6; /* Flexoki blue (light) */
+  --control-height: calc(14px * 1.4 + 12px + 2px); /* 14px font, 1.4 line-height, 6px+6px padding, 1px+1px border */
 
   color-scheme: light;
 }
@@ -69,14 +70,28 @@ body {
     sans-serif;
 }
 
+/* font-size/line-height/box-sizing are explicit, not left to the browser's
+   UA defaults - <button>, <input> and a plain <span> disagree on those by
+   default. That alone still isn't enough for <button>: Chrome computes a
+   <button>'s content box from its internal form-control metrics rather
+   than the line-height we set, so it rendered ~5.6px short of a same-
+   padding <input>/<span> even with identical computed font-size/line-
+   height/padding/border (verified via getComputedStyle - every value
+   matched except the final height). An explicit height, computed the same
+   way line-height would (font-size * 1.4 + padding + border), pins it -
+   see --control-height in :root. */
 button {
   font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  box-sizing: border-box;
+  height: var(--control-height);
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--text);
   cursor: pointer;
-  padding: 6px 12px;
+  padding: 0 12px;
 }
 
 button:hover {
@@ -90,9 +105,13 @@ button:disabled {
 
 input {
   font-family: inherit;
+  font-size: 14px;
+  line-height: 1.4;
+  box-sizing: border-box;
+  height: var(--control-height);
   border-radius: var(--radius);
   border: 1px solid var(--border);
-  padding: 6px 10px;
+  padding: 0 10px;
   background: var(--surface);
   color: var(--text);
 }
@@ -117,28 +136,30 @@ div:hover > .favorite-toggle {
 
 /* Icon-only button (X cancel, pencil, etc) - square-ish padding instead of
    the default rule's wider text padding, so it doesn't stretch next to an
-   icon glyph. Height still derives from padding+border+line-height, same
-   as the default button rule, so it lines up with text buttons beside it. */
+   icon glyph. height: var(--control-height) (not line-height math) keeps
+   it level with its sibling buttons/chip - see the --control-height
+   comment on the base `button` rule for why. */
 .icon-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 6px 9px;
+  height: var(--control-height);
+  padding: 0 9px;
 }
 
-/* Selection-count chip (Timeline.tsx toolbar) - same box model as the
-   default button rule (border-box, same padding/font-size/line-height) so
-   its height matches its sibling buttons exactly, just filled solid
-   instead of outlined. */
+/* Selection-count chip (Timeline.tsx toolbar) - a <span>, not a <button>,
+   so it needs its own box model, pinned to the same --control-height as
+   its sibling buttons/input rather than relying on padding+line-height to
+   agree by coincidence. */
 .count-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  height: var(--control-height);
   border-radius: var(--radius);
   border: 1px solid var(--selection);
-  padding: 6px 12px;
+  padding: 0 12px;
   font-size: 14px;
-  line-height: 1.4;
   box-sizing: border-box;
   background: var(--selection);
   color: #10151c; /* fixed near-black - reads on both light/dark blue.selection */
