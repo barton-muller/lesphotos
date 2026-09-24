@@ -497,6 +497,7 @@ function App() {
                 right: 0,
                 zIndex: 60,
                 minWidth: 160,
+                width: 'max-content',
                 padding: 6,
                 borderRadius: 'var(--radius)',
                 border: '1px solid var(--border)',
@@ -514,7 +515,7 @@ function App() {
                   setMenuOpen(false)
                   runSync()
                 }}
-                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px' }}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px', whiteSpace: 'nowrap' }}
               >
                 Sync now
               </button>
@@ -534,7 +535,7 @@ function App() {
                     runDownloadAll()
                   }
                 }}
-                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px' }}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px', whiteSpace: 'nowrap' }}
               >
                 {downloadingThumbs ? 'Stop downloading' : 'Download Thumbnails'}
               </button>
@@ -545,7 +546,7 @@ function App() {
                   setMenuOpen(false)
                   handleLogout()
                 }}
-                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px' }}
+                style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px', whiteSpace: 'nowrap' }}
               >
                 Log out
               </button>
