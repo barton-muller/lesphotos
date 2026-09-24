@@ -12,12 +12,14 @@
   --text-muted: #767676;
   --accent: #d4a017; /* warm gold, matches the existing ★ favorite color */
   --accent-contrast: #ffffff;
-  --danger: #c0392b;
+  --danger: #af3029; /* Flexoki red (light) */
+  --success: #66800b; /* Flexoki green (light) */
+  --warning: #bc5215; /* Flexoki orange (light) */
   --scrubber-track: #d0d0d0;
   --scrubber-indicator: #af3029; /* Flexoki red (light) */
   --radius: 8px;
   --sidebar-width: 220px;
-  --selection: #4a9eff;
+  --selection: #205ea6; /* Flexoki blue (light) */
 
   color-scheme: light;
 }
@@ -32,10 +34,12 @@
     --text-muted: #9a9a9a;
     --accent: #e0b83a; /* lightened gold - #d4a017 loses contrast on dark */
     --accent-contrast: #17171a;
-    --danger: #e0655a;
+    --danger: #d14b41; /* Flexoki red (dark) */
+    --success: #879a39; /* Flexoki green (dark) */
+    --warning: #da702c; /* Flexoki orange (dark) */
     --scrubber-track: #3a3a3f;
     --scrubber-indicator: #d14b41; /* Flexoki red (dark) */
-    --selection: #6ab4ff;
+    --selection: #4385be; /* Flexoki blue (dark) */
 
     color-scheme: dark;
   }
@@ -109,6 +113,37 @@ div:hover > .favorite-toggle {
    it's the state indicator, not just a control. */
 .favorite-toggle[aria-label='Unfavorite'] {
   opacity: 1;
+}
+
+/* Icon-only button (X cancel, pencil, etc) - square-ish padding instead of
+   the default rule's wider text padding, so it doesn't stretch next to an
+   icon glyph. Height still derives from padding+border+line-height, same
+   as the default button rule, so it lines up with text buttons beside it. */
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 9px;
+}
+
+/* Selection-count chip (Timeline.tsx toolbar) - same box model as the
+   default button rule (border-box, same padding/font-size/line-height) so
+   its height matches its sibling buttons exactly, just filled solid
+   instead of outlined. */
+.count-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius);
+  border: 1px solid var(--selection);
+  padding: 6px 12px;
+  font-size: 14px;
+  line-height: 1.4;
+  box-sizing: border-box;
+  background: var(--selection);
+  color: #10151c; /* fixed near-black - reads on both light/dark blue.selection */
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 
 /* The slot is a horizontal-scroll strip (App.tsx: overflowX: auto) for

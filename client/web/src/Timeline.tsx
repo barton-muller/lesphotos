@@ -10,6 +10,9 @@ import { StarIcon } from './StarIcon'
 import { RangeIcon } from './RangeIcon'
 import { PencilIcon } from './PencilIcon'
 import { PinIcon } from './PinIcon'
+import { CloseIcon } from './CloseIcon'
+import { CheckIcon } from './CheckIcon'
+import { CheckSquareIcon } from './CheckSquareIcon'
 import { prefetchThumbnails, setThumbnailBudget } from './thumbnails'
 import { PhotoViewer } from './PhotoViewer'
 import { computeMonthBuckets, YearScrubber } from './YearScrubber'
@@ -533,11 +536,22 @@ function MomentHeader({
           onChange={(e) => setLabel(e.target.value)}
           style={{ ...smallInput, flex: '1 1 160px', minWidth: 100 }}
         />
-        <button type="submit" style={smallButton}>
-          Save
+        <button
+          type="submit"
+          aria-label="Save"
+          title="Save"
+          style={{ ...smallButton, display: 'flex', alignItems: 'center', color: 'var(--success)', borderColor: 'var(--success)' }}
+        >
+          <CheckIcon size={13} />
         </button>
-        <button type="button" onClick={() => setEditing(false)} style={smallButton}>
-          Cancel
+        <button
+          type="button"
+          onClick={() => setEditing(false)}
+          aria-label="Cancel"
+          title="Cancel"
+          style={{ ...smallButton, display: 'flex', alignItems: 'center', color: 'var(--danger)', borderColor: 'var(--danger)' }}
+        >
+          <CloseIcon size={13} />
         </button>
         <button
           type="button"
@@ -1165,52 +1179,110 @@ export function Timeline({
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Toolbar>
-        {!mergeMode && (
+        {!mergeMode && !selectionMode && (
           <button
             type="button"
             data-testid="selection-mode-toggle"
             onClick={() => {
-              setSelectionMode((v) => !v)
+              setSelectionMode(true)
               setSelectedIds(new Set())
               setAnchorId(null)
               setCreateStatus('')
             }}
           >
-            {selectionMode ? 'Cancel selection' : 'Select photos'}
+            Select photos
           </button>
+        )}
+        {selectionMode && (
+          <>
+            <button
+              type="button"
+              data-testid="selection-mode-toggle"
+              className="icon-button"
+              aria-label="Cancel selection"
+              title="Cancel selection"
+              style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}
+              onClick={() => {
+                setSelectionMode(false)
+                setSelectedIds(new Set())
+                setAnchorId(null)
+                setCreateStatus('')
+              }}
+            >
+              <CloseIcon size={14} />
+            </button>
+            {selectedIds.size > 0 && (
+              <span className="count-chip">
+                <CheckSquareIcon size={14} />
+                {selectedIds.size}
+              </span>
+            )}
+          </>
         )}
         {selectionMode && selectedIds.size > 0 && (
           <>
-            <span>{selectedIds.size} selected</span>
             <input
               data-testid="new-moment-label-input"
               placeholder="New moment name"
               value={newMomentLabel}
               onChange={(e) => setNewMomentLabel(e.target.value)}
             />
-            <button type="button" data-testid="create-moment-button" onClick={createMoment} disabled={!newMomentLabel.trim()}>
-              Create moment
+            <button
+              type="button"
+              data-testid="create-moment-button"
+              className="icon-button"
+              aria-label="Create moment"
+              title="Create moment"
+              disabled={!newMomentLabel.trim()}
+              style={!newMomentLabel.trim() ? undefined : { color: 'var(--success)', borderColor: 'var(--success)' }}
+              onClick={createMoment}
+            >
+              <CheckIcon size={14} />
             </button>
           </>
         )}
         {createStatus && <span style={{ fontSize: 12 }}>{createStatus}</span>}
 
-        {!selectionMode && (
+        {!selectionMode && !mergeMode && (
           <button
             type="button"
             data-testid="merge-mode-toggle"
             onClick={() => {
-              setMergeMode((v) => !v)
+              setMergeMode(true)
               setSelectedMomentPaths(new Set())
               setMergeStatus('')
             }}
           >
-            {mergeMode ? 'Cancel merge' : 'Merge moments'}
+            Merge moments
           </button>
+        )}
+        {mergeMode && (
+          <>
+            <button
+              type="button"
+              data-testid="merge-mode-toggle"
+              className="icon-button"
+              aria-label="Cancel merge"
+              title="Cancel merge"
+              style={{ color: 'var(--danger)', borderColor: 'var(--danger)' }}
+              onClick={() => {
+                setMergeMode(false)
+                setSelectedMomentPaths(new Set())
+                setMergeStatus('')
+              }}
+            >
+              <CloseIcon size={14} />
+            </button>
+            {selectedMomentPaths.size > 0 && (
+              <span className="count-chip">
+                <CheckSquareIcon size={14} />
+                {selectedMomentPaths.size}
+              </span>
+            )}
+          </>
         )}
         {mergeMode && selectedMomentPaths.size > 0 && (
           <>
-            <span>{selectedMomentPaths.size} moment(s) selected</span>
             <input
               data-testid="merge-label-input"
               placeholder="Merged moment name"
@@ -1220,10 +1292,18 @@ export function Timeline({
             <button
               type="button"
               data-testid="merge-button"
-              onClick={merge}
+              className="icon-button"
+              aria-label="Merge"
+              title="Merge"
               disabled={selectedMomentPaths.size < 2 || !mergeLabel.trim()}
+              style={
+                selectedMomentPaths.size < 2 || !mergeLabel.trim()
+                  ? undefined
+                  : { color: 'var(--success)', borderColor: 'var(--success)' }
+              }
+              onClick={merge}
             >
-              Merge
+              <CheckIcon size={14} />
             </button>
           </>
         )}
