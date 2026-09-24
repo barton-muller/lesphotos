@@ -270,16 +270,23 @@ class SuggestNameRequest(BaseModel):
 def suggest_name(req: SuggestNameRequest, sess: Session = Depends(current)):
     """
     Opt-in only - never called automatically during scan/reorganize (see
-    docs/decisions/geo-reverse-geocoding.md and plan.md's writeup of why:
-    keeps Nominatim calls happening only when the user actually asks,
-    rather than silently on every ingest).
+    docs/decisions/geo-reverse-geocoding.md).
+
+    Coarse city-level naming (geocoding.suggest_city_moment_label), not
+    Nominatim's street-level suggest_moment_label - the latter is right for
+    geocoding.py's original use (a single "where was I" lookup) but was too
+    noisy for a moment name a human picks at a glance (see
+    docs/known-issues.md's resolved "overly specific geopoint name" entry).
+    This matches the coarser naming tools/name_moments_by_city.py already
+    used for the Takeout import, including its custom_locations.json
+    overrides - no Nominatim call, no network, no 1 req/sec wait.
     """
     host_path = _resolve_host_path(sess.library, req.moment_path)
     if not host_path.is_dir():
         raise HTTPException(status_code=404, detail="moment not found")
 
     gps_list = [geocoding.read_gps(f) for f in host_path.iterdir() if f.is_file()]
-    label = geocoding.suggest_moment_label(gps_list)
+    label = geocoding.suggest_city_moment_label(gps_list)
     if not label:
         return {"ok": True, "suggestion": None}
     date_prefix = date_prefix_str(host_path.name)
