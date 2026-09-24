@@ -309,8 +309,10 @@ production build, and `curl` against a live server. This has repeatedly caught b
 reading the code missed: the cookie auth model, service-worker dev behaviour, pagination
 truncation, an IndexedDB migration gap, and a full-res race that only appeared once the
 backend got fast enough to lose it. There's also a small pytest suite (`server/tests/`,
-`uv run pytest server/tests`) for pure logic and one security-critical path check — it
-supplements this, never substitutes for it. See `docs/testing-guide.md` for the fuller
+`uv run pytest server/tests`) for pure logic and one security-critical path check, and a
+committed `@playwright/test` suite (`client/web/tests/`, `npx playwright test`) that runs
+against a fully isolated, self-bootstrapping instance — both supplement this, never
+substitute for it. See `docs/testing-guide.md` for the fuller
 guide: the two-tier (fake vs. the real ~26,000-photo library) testing setup, what to check
 after touching each area of the app, and how to run/compare performance benchmarks
 (`tools/bench.py`) — speed at real library size is a first-class concern here, not an

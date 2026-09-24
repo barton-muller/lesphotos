@@ -39,3 +39,10 @@ deploy/test-credentials.md
 # GeoNames cities15000 dataset - fetched on demand via
 # `python tools/city_lookup.py --fetch`, not source.
 tools/data/
+
+# @playwright/test's isolated test instance data dir + its own reports -
+# see client/web/tests/setup/test-server.sh and playwright.config.ts.
+client/web/tests/.data/
+client/web/test-results/
+client/web/playwright-report/
+client/web/blob-report/

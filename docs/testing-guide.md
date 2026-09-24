@@ -21,10 +21,10 @@ python3 manage.py add-user qa "$PWD/data/photos/qa" --password <something>
 python3 indexer.py --user qa
 ```
 
-This is what the previous session used to validate the Android UI fixes (pinch, favorite
-refresh, etc.) - see the commit history around `7098ad5` for the actual Playwright script
-used, which is a good starting template for a new one (not committed as-is; see "Ad hoc vs
-committed scripts" below).
+This is what an earlier session used, via ad hoc Playwright scripts, to validate the Android
+UI fixes (pinch, favorite refresh, etc.) in commit `7098ad5` - those checks are now the
+committed `@playwright/test` suite under `client/web/tests/`, see "Committed end-to-end
+tests" below.
 
 **Tier 2 - Bob's laptop, ~26,000 real photos.** This is the primary place real testing
 happens, and the only place that can validate anything volume-dependent: Safari's per-row
@@ -102,11 +102,59 @@ explicitly in any report that relies on touch emulation for a gesture-conflict c
 Same rule as `CLAUDE.md` already states for scratch scripts generally: write throwaway
 Playwright checks in the scratchpad (cloud sessions) or wherever's convenient (local), and
 delete them after - **unless** the check is worth re-running on every future change, in
-which case commit it. There is no committed Playwright harness yet; if you write one worth
-keeping, a reasonable home is `client/web/tests/` as plain Node scripts against a running
-`preview` server (matching the style used to validate the Android fixes), not a full
-`@playwright/test` migration unless the number of committed checks grows enough to justify
-the runner overhead.
+which case add it to the committed suite below rather than leaving it as a loose script.
+
+## Committed end-to-end tests
+
+`client/web/tests/` (`@playwright/test`) is the maintained regression suite - what the
+earlier ad hoc Android-fix scripts turned into once they were worth keeping.
+
+```sh
+cd client/web
+npx playwright test          # headless, all projects
+npx playwright test --ui     # interactive runner, for writing/debugging a spec
+```
+
+**Fully self-contained.** `playwright.config.ts`'s `webServer` runs
+`tests/setup/test-server.sh`, which bootstraps and serves an isolated instance: its own data
+dir (`tests/.data/`, gitignored), a small fakelib library, one `e2e` account, and the real
+production build (`api:root_app`, not `vite dev` - matching how `CLAUDE.md` says validation
+should happen) on its own throwaway port (`:8199` by default). It never touches the
+developer's own `:8001`/`:5173` dev instances or their real login session, and the bootstrap
+is idempotent - safe to leave running and re-invoke `npx playwright test` repeatedly while
+iterating on a spec.
+
+Two projects run every spec: `desktop-chromium` and `mobile-android` (a real Pixel 7 device
+profile with touch). A spec that only makes sense on one skips itself on the other via
+`test.skip(({ isMobile }) => ...)` / `test.skip(({ browserName }) => ...)` - see
+`mobile-layout.spec.ts` and `pinch-zoom.spec.ts` for the pattern.
+
+**`workers: 1`, deliberately.** All projects share one backend and one library, so two
+copies of a state-mutating test (e.g. `favorite-no-refresh.spec.ts`, running once per
+project) racing on the same live data produces a very convincing but entirely test-caused
+failure - this is exactly what happened once during this suite's own development, diagnosed
+down to a shared-state race before the fix. A bigger suite would want per-test isolated
+libraries instead of serializing; this one is small enough (~20s total) that trading
+parallelism for determinism is the easy call.
+
+**Click vs. tap, and why `favorite-no-refresh.spec.ts` doesn't assert exact scrollTop
+equality.** Investigated at length during development: on `mobile-android` specifically,
+`@playwright/test`'s own `.click()` (via the test runner) nudges scrollTop by a few hundred
+pixels even against a button already fully inside the viewport - reproducible and
+deterministic, but absent when the identical interaction runs via bare `playwright-core`
+(no test runner) or via a real `page.touchscreen.tap()`. Read as an internal "make sure this
+is robustly interactable" scroll correction belonging to the test runner's own action
+implementation, not the app - there is no `scrollIntoView`/`.focus()` call anywhere near the
+favorite-toggle code, confirmed by reading it. The spec accounts for this rather than fights
+it: it asserts the actual regression signature (no "Loading…" flash, scroll doesn't reset
+toward the top) instead of pixel-exact equality. If a future spec hits the same symptom,
+this is the explanation to reach for before assuming a product bug.
+
+**A tile is `[data-testid=photo-tile]` on either its `<img>` or its placeholder `<div>`** -
+not `img[alt]`. Thumbnail *pixels* are opt-in (`allowNetwork: false` in `useThumbnail.ts`;
+see `CLAUDE.md`'s "thumbnailBlob is optional" gotcha), so a freshly-synced grid renders
+placeholders only, same as real first-use - a test that waits for `<img>` specifically will
+time out against a library that hasn't run "Download Thumbnails" yet.
 
 ## Automated tests
 

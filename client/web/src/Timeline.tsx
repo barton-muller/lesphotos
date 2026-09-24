@@ -203,6 +203,7 @@ const Thumbnail = memo(function Thumbnail({ photo, tileSize, onOpen, selectionMo
       {url ? (
       <img
         src={url}
+        data-testid="photo-tile"
         // The moment name, not photo.id: alt text is what the browser
         // renders when the image has no source, so a raw UUID was appearing
         // in the grid whenever a blob wasn't resident yet.
@@ -247,6 +248,7 @@ const Thumbnail = memo(function Thumbnail({ photo, tileSize, onOpen, selectionMo
         // outline as the real tile, so a fast scroll stays fully interactive
         // instead of dead until its thumbnail arrives.
         <div
+          data-testid="photo-tile"
           onClick={(e) => {
             if (!selectionMode) return onOpen()
             if (e.shiftKey) return onSelectRangeTo()

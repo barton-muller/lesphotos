@@ -12,6 +12,9 @@ described in `docs/decisions/versioning.md`. Entries land in the same commit tha
 - `server/tests/` - a pytest suite for pure logic and security-critical path validation
   (`moment_dates`, `fakelib/grouping`, `api._resolve_host_path`, `auth` password hashing).
   Complements, not replaces, the real-app validation `CLAUDE.md` already describes.
+- `client/web/tests/` - a committed `@playwright/test` suite (desktop + real Pixel 7 touch
+  device) against a fully isolated, self-bootstrapping instance, covering the Android UI
+  fixes below as maintained regression checks rather than one-off scripts.
 - `tools/bench.py` / `tools/bench_compare.py` - indexer performance benchmarking against a
   real library, logged to `benchmarks/results.jsonl` and comparable across commits (only
   within the same `--tag`, i.e. the same machine/library).
