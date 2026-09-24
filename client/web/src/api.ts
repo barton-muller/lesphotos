@@ -100,10 +100,11 @@ export function suggestMomentNameForPhotos(photoPhotoviewPaths: string[]) {
 }
 
 // User-selected photos -> a new moment folder - see docs/decisions/range-select-new-moment.md
-export function createMomentFromPhotos(photoPhotoviewPaths: string[], newLabel: string) {
+export function createMomentFromPhotos(photoPhotoviewPaths: string[], newLabel: string, newDate?: string) {
   return post<{ ok: true; new_path: string; moved_count: number }>('/moments/create', {
     photo_paths: photoPhotoviewPaths.map(toApiPath),
     new_label: newLabel,
+    new_date: newDate ?? null,
   })
 }
 

@@ -1052,9 +1052,31 @@ export function Timeline({
   const [selectionMode, setSelectionMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [newMomentLabel, setNewMomentLabel] = useState('')
+  const [newMomentDate, setNewMomentDate] = useState('')
   const [createStatus, setCreateStatus] = useState('')
   // Where the next range starts: the last photo tapped without extending.
   const [anchorId, setAnchorId] = useState<string | null>(null)
+
+  // Earliest capture date among the current selection - photo.date sorts
+  // as a plain string (Timeline's own sort already relies on this), so a
+  // string min is enough without parsing. Tracks the selection live rather
+  // than only seeding a default once: growing/shrinking the range, or
+  // switching which photos are selected, should always pull the date field
+  // back to match, not leave it stuck on whatever the selection looked
+  // like a few taps ago.
+  const earliestSelectedDate = useMemo(() => {
+    if (!photos || selectedIds.size === 0) return null
+    let earliest: string | null = null
+    for (const p of photos) {
+      if (!selectedIds.has(p.id)) continue
+      if (earliest === null || p.date < earliest) earliest = p.date
+    }
+    return earliest ? earliest.slice(0, 10) : null
+  }, [photos, selectedIds])
+
+  useEffect(() => {
+    setNewMomentDate(earliestSelectedDate ?? '')
+  }, [earliestSelectedDate])
 
   const photoOrder = useMemo(() => {
     const map = new Map<string, number>()
@@ -1124,11 +1146,12 @@ export function Timeline({
     setCreateStatus('Creating…')
     try {
       const selectedPaths = photos.filter((p) => selectedIds.has(p.id)).map((p) => p.path)
-      const result = await createMomentFromPhotos(selectedPaths, newMomentLabel.trim())
+      const result = await createMomentFromPhotos(selectedPaths, newMomentLabel.trim(), newMomentDate || undefined)
       setCreateStatus(`Created "${result.new_path}" with ${result.moved_count} photo(s)`)
       setSelectedIds(new Set())
       setSelectionMode(false)
       setNewMomentLabel('')
+      setNewMomentDate('')
       // Same reasoning as MomentHeader's rename: the moved photos now have
       // new PhotoView ids, so the client cache holds stale rows for them
       // until a sync runs - do it automatically rather than relying on the
@@ -1245,6 +1268,13 @@ export function Timeline({
         )}
         {selectionMode && selectedIds.size > 0 && (
           <>
+            <input
+              data-testid="new-moment-date-input"
+              type="date"
+              title="Defaults to the earliest selected photo's date - edit to override"
+              value={newMomentDate}
+              onChange={(e) => setNewMomentDate(e.target.value)}
+            />
             <input
               data-testid="new-moment-label-input"
               placeholder="New moment name"

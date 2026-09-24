@@ -19,7 +19,7 @@ import os
 import re
 import time
 import zipfile
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Response
@@ -179,6 +179,7 @@ def merge_moments(req: MergeMomentsRequest, sess: Session = Depends(current)):
 class CreateMomentRequest(BaseModel):
     photo_paths: list[str]
     new_label: str
+    new_date: str | None = None
 
 
 @app.post("/moments/create")
@@ -193,15 +194,30 @@ def create_moment(req: CreateMomentRequest, sess: Session = Depends(current)):
         raise HTTPException(status_code=400, detail="no photos selected")
 
     host_paths = [_resolve_host_path(sess.library, p) for p in req.photo_paths]
-    # Earliest moment (by its own YYYY-MM-DD-prefixed folder name, which
-    # sorts chronologically) supplies the date prefix, matching
-    # merge_moments' "earliest date wins" convention. Sorting by the
-    # *photo's own filename* here was a bug fixed in the same pass as the
-    # FileNotFoundError below - filenames aren't reliably date-ordered
-    # across different moments, only each moment's own folder name is.
-    earliest_parent = min((p.parent for p in host_paths), key=lambda d: d.name)
-    date_prefix = date_prefix_str(earliest_parent.name)
-    dest_dir = earliest_parent.parent / f"{date_prefix}-{req.new_label}"
+
+    if req.new_date is not None:
+        try:
+            datetime.strptime(req.new_date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"new_date must be YYYY-MM-DD, got {req.new_date!r}")
+        date_prefix = req.new_date
+        year_dir = sess.library.photos_root / req.new_date[:4]
+    else:
+        # Earliest moment (by its own YYYY-MM-DD-prefixed folder name, which
+        # sorts chronologically) supplies the date prefix, matching
+        # merge_moments' "earliest date wins" convention. Sorting by the
+        # *photo's own filename* here was a bug fixed in the same pass as
+        # the FileNotFoundError below - filenames aren't reliably
+        # date-ordered across different moments, only each moment's own
+        # folder name is. This branch only runs if the client didn't send
+        # new_date - the Select-photos toolbar always does, pre-filled from
+        # the earliest selected photo's real capture date (PhotoMeta.date),
+        # which is what the user actually sees and can edit, so this stays
+        # as a fallback for any other caller rather than the primary path.
+        earliest_parent = min((p.parent for p in host_paths), key=lambda d: d.name)
+        date_prefix = date_prefix_str(earliest_parent.name)
+        year_dir = earliest_parent.parent
+    dest_dir = year_dir / f"{date_prefix}-{req.new_label}"
 
     # No scan_pending case any more: that existed because PhotoView's
     # global scanAll could outlast its wait window after the moves had
