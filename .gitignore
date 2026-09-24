@@ -32,6 +32,10 @@ server/data/appdb.sqlite3-wal
 # Real deployment secrets (LESPHOTOS_SECRET). The .example is committed.
 deploy/lesphotos.env
 
+# Test account passwords (local dev users, NAS test/throwaway accounts) -
+# never in git, CLAUDE.md, or memory. See deploy/test-credentials.md.example.
+deploy/test-credentials.md
+
 # GeoNames cities15000 dataset - fetched on demand via
 # `python tools/city_lookup.py --fetch`, not source.
 tools/data/
