@@ -91,6 +91,14 @@ export function suggestMomentName(momentPhotoviewPath: string) {
   })
 }
 
+// Same suggestion, for a photo selection that isn't a moment folder yet -
+// the "New moment name" field in Select-photos mode.
+export function suggestMomentNameForPhotos(photoPhotoviewPaths: string[]) {
+  return post<{ ok: true; suggestion: string | null }>('/moments/suggest-name-for-photos', {
+    photo_paths: photoPhotoviewPaths.map(toApiPath),
+  })
+}
+
 // User-selected photos -> a new moment folder - see docs/decisions/range-select-new-moment.md
 export function createMomentFromPhotos(photoPhotoviewPaths: string[], newLabel: string) {
   return post<{ ok: true; new_path: string; moved_count: number }>('/moments/create', {

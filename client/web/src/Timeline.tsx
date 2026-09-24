@@ -1,7 +1,14 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
-import { createMomentFromPhotos, isStaleEditError, mergeMoments, renameMoment, suggestMomentName } from './api'
+import {
+  createMomentFromPhotos,
+  isStaleEditError,
+  mergeMoments,
+  renameMoment,
+  suggestMomentName,
+  suggestMomentNameForPhotos,
+} from './api'
 import { db, getPhotosVersion, subscribePhotosVersion, type PhotoMeta } from './db'
 import { toggleFavorite } from './favorites'
 import { useThumbnail } from './useThumbnail'
@@ -1133,6 +1140,23 @@ export function Timeline({
     }
   }
 
+  async function suggestNewMomentLabel() {
+    if (!photos || selectedIds.size === 0) return
+    setCreateStatus('Looking up location…')
+    try {
+      const selectedPaths = photos.filter((p) => selectedIds.has(p.id)).map((p) => p.path)
+      const result = await suggestMomentNameForPhotos(selectedPaths)
+      if (result.suggestion) {
+        setNewMomentLabel(result.suggestion)
+        setCreateStatus('')
+      } else {
+        setCreateStatus('No GPS data found for this selection')
+      }
+    } catch (err) {
+      setCreateStatus(`Suggestion failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
   // Merge mode: select 2+ whole moments (not individual photos, unlike
   // selectionMode above) and combine them into one. Mutually exclusive
   // with selectionMode - toggling one off the other avoids a confusing UI
@@ -1227,6 +1251,16 @@ export function Timeline({
               value={newMomentLabel}
               onChange={(e) => setNewMomentLabel(e.target.value)}
             />
+            <button
+              type="button"
+              data-testid="suggest-new-moment-name-button"
+              onClick={suggestNewMomentLabel}
+              title="Suggest a name from location"
+              style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+            >
+              <PinIcon size={13} />
+              Suggest
+            </button>
             <button
               type="button"
               data-testid="create-moment-button"

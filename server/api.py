@@ -293,6 +293,30 @@ def suggest_name(req: SuggestNameRequest, sess: Session = Depends(current)):
     return {"ok": True, "suggestion": f"{date_prefix}-{label}"}
 
 
+class SuggestNameForPhotosRequest(BaseModel):
+    photo_paths: list[str]
+
+
+@app.post("/moments/suggest-name-for-photos")
+def suggest_name_for_photos(req: SuggestNameForPhotosRequest, sess: Session = Depends(current)):
+    """
+    Same suggestion as /moments/suggest-name, but for a photo selection that
+    isn't a moment folder yet - the "New moment name" field in the
+    Select-photos toolbar (Timeline.tsx's createMoment flow), which has no
+    moment_path to iterdir() because the moment doesn't exist until Create
+    is pressed. No date_prefix in the response: the create endpoint derives
+    its own date prefix from the earliest selected photo's moment folder
+    (see /moments/create), this only ever suggests the label part.
+    """
+    if not req.photo_paths:
+        raise HTTPException(status_code=400, detail="no photos selected")
+
+    host_paths = [_resolve_host_path(sess.library, p) for p in req.photo_paths]
+    gps_list = [geocoding.read_gps(p) for p in host_paths if p.is_file()]
+    label = geocoding.suggest_city_moment_label(gps_list)
+    return {"ok": True, "suggestion": label}
+
+
 @app.get("/photo-ids")
 def photo_ids(response: Response, sess: Session = Depends(current)):
     """
