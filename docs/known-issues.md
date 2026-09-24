@@ -4,35 +4,14 @@ Bugs observed in real use, not yet root-caused or fixed. One entry per issue: wh
 observed, what was expected, and any leads. Move an entry to a commit message (and delete
 it here) once it's actually fixed — this file is a queue, not a changelog.
 
-## TODO — UI papercuts (reported 2026-09-24)
+## Android pinch on the timeline — fixed, needs a real-device check
 
-- [ ] **Share button shows a status message after sharing.** Not needed — the OS share
-      sheet is its own confirmation. Lead: `PhotoViewer.tsx` sets `shareStatus` from
-      `shareOrDownloadPhoto`'s result (`'Shared'` / `'Saved'` / `'Downloaded'`) and renders
-      it as `share-status`. Drop the message for `'shared'`; keep it for the download
-      fallbacks, where there is no other feedback that anything happened.
-- [ ] **Android: pinch on the timeline zooms the page instead of changing tiles per row.**
-      Lead: `usePinchZoom.ts` listens to pointer events but the scroll element sets no
-      `touch-action`, so Chrome claims the two-finger gesture as native pinch-zoom and
-      fires `pointercancel` before our handler sees any movement. Likely fix:
-      `touch-action: pan-y` on the timeline scroll element (keeps vertical scroll, hands
-      pinch to JS). Verify on a real Android device — desktop emulation doesn't reproduce
-      native pinch arbitration.
-- [ ] **Android: +/− density buttons push Select / Merge moments into a horizontal
-      scroller.** `#lesphotos-toolbar-slot` in `App.tsx` is `flex: 1; overflowX: auto`, so
-      on a narrow header those controls end up behind a scrollbar. Once pinch works (above),
-      hide the +/− buttons on touch devices (`@media (pointer: coarse)`) to free the room;
-      otherwise collapse Select/Merge to icons.
-- [ ] **"Download Thumbnails" is too long for the account menu.** Shorten to icon +
-      "Thumbs" (download icon); the existing `title` tooltip already carries the full
-      explanation. `App.tsx`, `data-testid="sync-all"`.
-- [ ] **Android: grid appears to refresh when favouriting.** Lead: `Timeline.tsx`'s
-      load effect depends on `tableVersion` (bumped by any `db.photos` write, including
-      `toggleFavorite`) and starts with `setPhotos(undefined)`, then re-reads the whole
-      table in two pages. So every star blanks and rebuilds the grid; a fast desktop hides
-      it, a phone doesn't. Fix: don't clear `photos` on a version bump (only on
-      `starredOnly` change), or patch the single row in place for a favourite toggle.
-      Check it also preserves scroll position.
+**Reported 2026-09-24**: pinching the grid on Android zoomed the page instead of changing
+tiles per row. Fixed in `usePinchZoom.ts` (touch events with a non-passive `touchmove`, plus
+`touch-action: pan-x pan-y` on the scroll element). Verified under Chromium's Pixel 7
+emulation with a CDP-synthesized pinch, but that emulation did **not** reproduce native page
+zoom even before the fix, so the original symptom is only proven gone on a real phone.
+Delete this entry once confirmed there.
 
 ## Favorite/star toggling does not sync across devices — permissions fix in progress
 

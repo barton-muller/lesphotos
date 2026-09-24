@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { Timeline } from './Timeline'
+import { DownloadIcon } from './DownloadIcon'
 import { StarIcon } from './StarIcon'
 import { StatusBar } from './StatusBar'
 import { useIsNarrow } from './useIsNarrow'
@@ -399,8 +400,10 @@ function App() {
         {/* Grid density (photos per row) previously had no discoverable
             trigger at all - pinch/ctrl+wheel over the grid works but isn't
             something anyone would find without being told. This is that
-            control made visible; the gesture keeps working alongside it. */}
-        <div
+            control made visible; the gesture keeps working alongside it.
+            Not on a phone: pinch is the native gesture there, and the
+            buttons pushed Select/Merge into a horizontal scroller. */}
+        {!narrow && <div
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -450,7 +453,7 @@ function App() {
           >
             +
           </button>
-        </div>
+        </div>}
 
         {/* Timeline portals its Select/Merge controls in here, so they share
             the header row instead of costing a second one - its selection
@@ -551,7 +554,10 @@ function App() {
                 }}
                 style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px', whiteSpace: 'nowrap' }}
               >
-                {downloadingThumbs ? 'Stop downloading' : 'Download Thumbnails'}
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <DownloadIcon size={15} />
+                  {downloadingThumbs ? 'Stop' : 'Thumbs'}
+                </span>
               </button>
               <button
                 type="button"
