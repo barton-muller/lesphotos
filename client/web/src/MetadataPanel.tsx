@@ -97,7 +97,7 @@ export function MetadataPanel({ photo, onClose }: { photo: PhotoMeta; onClose: (
           ✕
         </button>
       </div>
-      {error && <div style={{ color: '#f88' }}>Failed to load: {error}</div>}
+      {error && <div style={{ color: 'var(--danger)' }}>Failed to load: {error}</div>}
       {!detail && !error && <div>Loading…</div>}
       {detail && (
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>

@@ -17,8 +17,28 @@
   --scrubber-indicator: #af3029; /* Flexoki red (light) */
   --radius: 8px;
   --sidebar-width: 220px;
+  --selection: #4a9eff;
 
   color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a;
+    --surface: #232326;
+    --surface-hover: #2c2c30;
+    --border: #38383d;
+    --text: #e8e8e8;
+    --text-muted: #9a9a9a;
+    --accent: #e0b83a; /* lightened gold - #d4a017 loses contrast on dark */
+    --accent-contrast: #17171a;
+    --danger: #e0655a;
+    --scrubber-track: #3a3a3f;
+    --scrubber-indicator: #d14b41; /* Flexoki red (dark) */
+    --selection: #6ab4ff;
+
+    color-scheme: dark;
+  }
 }
 
 * {
@@ -89,6 +109,15 @@ div:hover > .favorite-toggle {
    it's the state indicator, not just a control. */
 .favorite-toggle[aria-label='Unfavorite'] {
   opacity: 1;
+}
+
+/* The slot is a horizontal-scroll strip (App.tsx: overflowX: auto) for
+   narrow viewports - without this, a flex child with no intrinsic width
+   (a button's text, a plain span) wraps onto a second line and grows the
+   whole toolbar tall instead of the strip scrolling sideways. */
+#lesphotos-toolbar-slot > * {
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* Status bar's activity dot. Inline styles can't declare keyframes. */

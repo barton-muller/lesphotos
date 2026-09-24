@@ -214,7 +214,7 @@ const Thumbnail = memo(function Thumbnail({ photo, tileSize, onOpen, selectionMo
           // glyph's visual weight isn't centered in its own em box, which
           // read as visibly off-center in a small circular badge - a border
           // has no such centering problem and is less visually intrusive.
-          outline: selected ? '3px solid #4a9eff' : photo.favorite ? '3px solid var(--accent)' : 'none',
+          outline: selected ? '3px solid var(--selection)' : photo.favorite ? '3px solid var(--accent)' : 'none',
           outlineOffset: -3,
         }}
         loading="lazy"
@@ -246,7 +246,7 @@ const Thumbnail = memo(function Thumbnail({ photo, tileSize, onOpen, selectionMo
             borderRadius: 4,
             cursor: 'pointer',
             outline: selected
-              ? '3px solid #4a9eff'
+              ? '3px solid var(--selection)'
               : photo.favorite
                 ? '3px solid var(--accent)'
                 : 'none',
@@ -289,7 +289,7 @@ const Thumbnail = memo(function Thumbnail({ photo, tileSize, onOpen, selectionMo
             top: 4,
             right: 4,
             border: '2px solid white',
-            background: selected ? '#4a9eff' : 'rgba(0,0,0,0.4)',
+            background: selected ? 'var(--selection)' : 'rgba(0,0,0,0.4)',
             borderRadius: '50%',
             width: 24,
             height: 24,
