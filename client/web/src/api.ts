@@ -386,6 +386,22 @@ export async function checkSession(): Promise<SessionState> {
   }
 }
 
+// Which build the server is actually running - surfaced in the profile
+// menu so a NAS restart can be confirmed as picking up the intended
+// deploy, not just that uvicorn came back up on :8001 (see
+// docs/testing-guide.md). Best-effort: an unreachable server or an old
+// build with no `version` field just shows nothing, never an error.
+export async function fetchServerVersion(): Promise<string | null> {
+  try {
+    const resp = await fetch(`${API_BASE}/health`, { cache: 'no-store', signal: AbortSignal.timeout(2500) })
+    if (!resp.ok) return null
+    const body = await resp.json()
+    return typeof body.version === 'string' ? body.version : null
+  } catch {
+    return null
+  }
+}
+
 // Clears the session cookie server-side. The local IndexedDB cache is
 // deliberately dropped by the caller rather than here: with per-user
 // libraries, leaving one user's thumbnails on the device for the next

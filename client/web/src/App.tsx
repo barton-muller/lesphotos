@@ -5,7 +5,7 @@ import { DownloadIcon } from './DownloadIcon'
 import { StarIcon } from './StarIcon'
 import { StatusBar } from './StatusBar'
 import { useIsNarrow } from './useIsNarrow'
-import { checkSession, login, logout } from './api'
+import { checkSession, fetchServerVersion, login, logout } from './api'
 import { db } from './db'
 import { downloadAllThumbnails, forceFullSync, isLocalStorageError, syncTimeline } from './sync'
 
@@ -285,6 +285,10 @@ function App() {
   // Still needed by Timeline: the scrubber rail collapses to a touch handle
   // on a phone even though the sidebar it used to share space with is gone.
   const narrow = useIsNarrow()
+  const [serverVersion, setServerVersion] = useState<string | null>(null)
+  useEffect(() => {
+    void fetchServerVersion().then(setServerVersion)
+  }, [])
 
   const [menuOpen, setMenuOpen] = useState(false)
   useEffect(() => {
@@ -570,6 +574,14 @@ function App() {
               >
                 Log out
               </button>
+              {serverVersion && (
+                <div
+                  data-testid="server-version"
+                  style={{ padding: '6px 8px', fontSize: 11, color: 'var(--text-muted)' }}
+                >
+                  v{serverVersion}
+                </div>
+              )}
             </div>
           )}
         </div>

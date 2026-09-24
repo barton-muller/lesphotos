@@ -18,3 +18,14 @@ dependencies = [
 import-tools = [
     "scipy>=1.18.1",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+# server/ itself, not server/tests, so `import api`/`import config` etc.
+# resolve the same way manage.py/run.sh already expect (--app-dir server).
+pythonpath = ["server"]
+testpaths = ["server/tests"]

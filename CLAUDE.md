@@ -304,11 +304,18 @@ steps; this section only covers restart.
 
 ### How validation is done
 
-There's no unit suite. Validation is **driving the real running app** — Playwright against the
+Validation is primarily **driving the real running app** — Playwright against the
 production build, and `curl` against a live server. This has repeatedly caught bugs that
 reading the code missed: the cookie auth model, service-worker dev behaviour, pagination
 truncation, an IndexedDB migration gap, and a full-res race that only appeared once the
-backend got fast enough to lose it.
+backend got fast enough to lose it. There's also a small pytest suite (`server/tests/`,
+`uv run pytest server/tests`) for pure logic and one security-critical path check — it
+supplements this, never substitutes for it. See `docs/testing-guide.md` for the fuller
+guide: the two-tier (fake vs. the real ~26,000-photo library) testing setup, what to check
+after touching each area of the app, and how to run/compare performance benchmarks
+(`tools/bench.py`) — speed at real library size is a first-class concern here, not an
+afterthought. `docs/decisions/versioning.md` covers the `VERSION` scheme and what counts as
+a breaking change for this app specifically.
 
 Two lessons that keep recurring:
 
