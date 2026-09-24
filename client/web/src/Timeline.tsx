@@ -8,6 +8,8 @@ import { useThumbnail } from './useThumbnail'
 import { usePinchZoom } from './usePinchZoom'
 import { StarIcon } from './StarIcon'
 import { RangeIcon } from './RangeIcon'
+import { PencilIcon } from './PencilIcon'
+import { PinIcon } from './PinIcon'
 import { prefetchThumbnails, setThumbnailBudget } from './thumbnails'
 import { PhotoViewer } from './PhotoViewer'
 import { computeMonthBuckets, YearScrubber } from './YearScrubber'
@@ -492,23 +494,62 @@ function MomentHeader({
   }
 
   if (editing && !mergeMode) {
+    const controlHeight = HEADER_HEIGHT - 5
+    const smallButton = {
+      fontSize: 12,
+      padding: '0 8px',
+      height: controlHeight,
+      lineHeight: `${controlHeight}px`,
+      flexShrink: 0,
+    }
+    const smallInput = {
+      fontSize: 12,
+      padding: '0 6px',
+      height: controlHeight,
+      boxSizing: 'border-box' as const,
+    }
     return (
-      <form onSubmit={submit} style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '8px 0 4px' }}>
+      <form
+        onSubmit={submit}
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 6,
+          alignItems: 'center',
+          height: HEADER_HEIGHT,
+          margin: 0,
+        }}
+      >
         <input
           data-testid="rename-date-input"
           type="date"
           value={date}
           onChange={(e) => setDate(e.target.value)}
+          style={{ ...smallInput, flexShrink: 0 }}
         />
-        <input data-testid="rename-input" value={label} onChange={(e) => setLabel(e.target.value)} />
-        <button type="submit">Save</button>
-        <button type="button" onClick={() => setEditing(false)}>
+        <input
+          data-testid="rename-input"
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          style={{ ...smallInput, flex: '1 1 160px', minWidth: 100 }}
+        />
+        <button type="submit" style={smallButton}>
+          Save
+        </button>
+        <button type="button" onClick={() => setEditing(false)} style={smallButton}>
           Cancel
         </button>
-        <button type="button" data-testid="suggest-name-button" onClick={suggest} style={{ fontSize: 12 }}>
-          📍 Suggest name
+        <button
+          type="button"
+          data-testid="suggest-name-button"
+          onClick={suggest}
+          title="Suggest a name from location"
+          style={{ ...smallButton, display: 'flex', alignItems: 'center', gap: 4 }}
+        >
+          <PinIcon size={12} />
+          Suggest
         </button>
-        <span>{status}</span>
+        {status && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{status}</span>}
       </form>
     )
   }
@@ -547,11 +588,25 @@ function MomentHeader({
       )}
       {formatMomentTitle(moment)}
       {!mergeMode && (
-        <button type="button" onClick={() => setEditing(true)} style={{ fontSize: 12 }}>
-          Rename
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          aria-label="Rename"
+          title="Rename"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 4,
+            flexShrink: 0,
+          }}
+        >
+          <PencilIcon size={13} />
         </button>
       )}
-      {status && <span style={{ fontSize: 12, fontWeight: 'normal' }}>{status}</span>}
+      {status && (
+        <span style={{ fontSize: 12, fontWeight: 'normal', color: 'var(--text-muted)' }}>{status}</span>
+      )}
     </h3>
   )
 }
@@ -1110,19 +1165,20 @@ export function Timeline({
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
       <Toolbar>
-        <button
-          type="button"
-          data-testid="selection-mode-toggle"
-          disabled={mergeMode}
-          onClick={() => {
-            setSelectionMode((v) => !v)
-            setSelectedIds(new Set())
-            setAnchorId(null)
-            setCreateStatus('')
-          }}
-        >
-          {selectionMode ? 'Cancel selection' : 'Select photos'}
-        </button>
+        {!mergeMode && (
+          <button
+            type="button"
+            data-testid="selection-mode-toggle"
+            onClick={() => {
+              setSelectionMode((v) => !v)
+              setSelectedIds(new Set())
+              setAnchorId(null)
+              setCreateStatus('')
+            }}
+          >
+            {selectionMode ? 'Cancel selection' : 'Select photos'}
+          </button>
+        )}
         {selectionMode && selectedIds.size > 0 && (
           <>
             <span>{selectedIds.size} selected</span>
@@ -1139,18 +1195,19 @@ export function Timeline({
         )}
         {createStatus && <span style={{ fontSize: 12 }}>{createStatus}</span>}
 
-        <button
-          type="button"
-          data-testid="merge-mode-toggle"
-          disabled={selectionMode}
-          onClick={() => {
-            setMergeMode((v) => !v)
-            setSelectedMomentPaths(new Set())
-            setMergeStatus('')
-          }}
-        >
-          {mergeMode ? 'Cancel merge' : 'Merge moments'}
-        </button>
+        {!selectionMode && (
+          <button
+            type="button"
+            data-testid="merge-mode-toggle"
+            onClick={() => {
+              setMergeMode((v) => !v)
+              setSelectedMomentPaths(new Set())
+              setMergeStatus('')
+            }}
+          >
+            {mergeMode ? 'Cancel merge' : 'Merge moments'}
+          </button>
+        )}
         {mergeMode && selectedMomentPaths.size > 0 && (
           <>
             <span>{selectedMomentPaths.size} moment(s) selected</span>

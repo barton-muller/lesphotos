@@ -536,7 +536,7 @@ function App() {
                 }}
                 style={{ display: 'block', width: '100%', textAlign: 'left', padding: '8px' }}
               >
-                {downloadingThumbs ? 'Stop downloading' : 'Download all for offline'}
+                {downloadingThumbs ? 'Stop downloading' : 'Download Thumbnails'}
               </button>
               <button
                 type="button"
