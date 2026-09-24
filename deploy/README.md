@@ -183,17 +183,44 @@ one destination folder, so a photo becomes visible without a full library rescan
 
 ## Making changes
 
-```sh
-# on the Mac: edit, commit, push, and rebuild the client if it changed
-cd client/web && npm run build
-rsync -av dist/ alice@nas:/volume1/lesphotos/client/web/dist/
+Edit, commit, and push on the Mac as usual. Then, over SSH as `alice@nas` (see
+CLAUDE.md's "SSH login user" note — `bob@nas` has no account):
 
-# on the NAS
-cd /volume1/lesphotos
+```sh
+cd /volume1/lesphotos/app
 git pull
-uv sync                    # only if dependencies changed
-# Task Scheduler -> select the task -> Stop, then Run
+
+# The client is built ON THE NAS, not on the Mac + rsync - confirmed working
+# directly (2026-09-24). node/npm exist at /usr/local/bin but are NOT on a
+# non-interactive SSH shell's default PATH (only /usr/bin:/bin:/usr/sbin:/sbin) -
+# an interactive `ssh alice@nas` shell finds them fine via DSM's own profile
+# setup, but `ssh host 'npm ...'` needs the PATH set explicitly or it fails
+# with "npm: command not found" despite npm genuinely being installed.
+export PATH=/usr/local/bin:$PATH
+cd client/web && npm install && npm run build
+cd /volume1/lesphotos/app
+
+# Only if server-side dependencies changed:
+UV=/var/services/homes/Alice/.local/bin/uv $UV sync
+
+pkill -f "uvicorn api:root_app"
+UV=/var/services/homes/Alice/.local/bin/uv /bin/bash deploy/run.sh \
+  >> /volume1/lesphotos/data/server.log 2>&1 &
+sleep 2 && curl -I http://localhost:8001    # confirm it came back up
 ```
+
+The restart here is the same as CLAUDE.md's "Restarting the server" section - see
+that doc if this drifts from what actually works, since the exact command matters
+(Task Scheduler needs to match it too, for the same reason).
+
+**If a schema change is part of the update** (a new/changed column in
+`server/appdb/`), nothing extra is needed to migrate — `db.connect()` runs its
+migration on first connection, which happens automatically on the server's next
+request. Run `python3 indexer.py --user <name> --no-derive` once per library
+afterward only if you want existing rows to pick up a new derived column
+immediately rather than waiting for their next natural touch (a move, a favorite
+toggle, a re-index) — confirmed safe to run against a live library while the
+server is up.
 
 Nothing durable lives in the checkout, so `git pull` can never touch photos, thumbnails,
 accounts or stars.
