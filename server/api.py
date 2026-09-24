@@ -287,10 +287,14 @@ def suggest_name(req: SuggestNameRequest, sess: Session = Depends(current)):
 
     gps_list = [geocoding.read_gps(f) for f in host_path.iterdir() if f.is_file()]
     label = geocoding.suggest_city_moment_label(gps_list)
-    if not label:
-        return {"ok": True, "suggestion": None}
-    date_prefix = date_prefix_str(host_path.name)
-    return {"ok": True, "suggestion": f"{date_prefix}-{label}"}
+    # Label only, no date prefix - the caller (Timeline.tsx's rename form)
+    # already has its own date field and sets it into the label input, so a
+    # prefix here landed IN the label, producing a folder name like
+    # "2026-08-21-2026-08-21-london-united-kingdom" and rendering as a
+    # visibly doubled date ("2026 August 21st - 2026 08 21 London..."). The
+    # date the rename actually submits comes from the form's own date
+    # field, never from this response.
+    return {"ok": True, "suggestion": label}
 
 
 class SuggestNameForPhotosRequest(BaseModel):
