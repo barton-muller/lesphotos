@@ -330,6 +330,9 @@ def derive_pending(library, cache=None, limit=None, verbose=False, path_map=None
                     "UPDATE media SET derived = 1 WHERE content_hash = ?",
                     (r["content_hash"],),
                 )
+                # This is the moment a photo becomes visible to /timeline
+                # (WHERE derived = 1) - a delta client must see it.
+                db.bump_changed_seq(conn, r["content_hash"])
                 # Shard assignment always targets library.thumb_shards_dir,
                 # not the (possibly remapped, see path_map/--cache above)
                 # `cache` this derive run is writing thumbnails to - shards
@@ -550,6 +553,7 @@ def link_motion_pairs(library, verbose=False, path_map=None):
                 "WHERE content_hash = ?",
                 (off, r["content_hash"]),
             )
+            db.bump_changed_seq(conn, r["content_hash"])
             google += 1
 
     stills, clips = {}, {}
@@ -576,18 +580,26 @@ def link_motion_pairs(library, verbose=False, path_map=None):
             "UPDATE media SET motion_kind = 'apple', motion_path = ? WHERE content_hash = ?",
             (clip["path"], still["content_hash"]),
         )
+        db.bump_changed_seq(conn, still["content_hash"])
         conn.execute(
             "UPDATE media SET is_motion_clip = 1 WHERE content_hash = ?",
             (clip["content_hash"],),
         )
+        db.bump_changed_seq(conn, clip["content_hash"])
         linked += 1
         if verbose:
             print(f"  pair {Path(still['path']).name} + {Path(clip['path']).name}", file=sys.stderr)
 
     # A clip whose still is gone must become visible again, or deleting the
-    # still would hide the video forever with no way to reach it.
+    # still would hide the video forever with no way to reach it. All rows
+    # touched by this one statement share a single new changed_seq value,
+    # computed once before the update runs - correct for a delta fetch
+    # (WHERE changed_seq > since, not =), just coarser than the one-bump-
+    # per-row helper used elsewhere.
     orphaned = conn.execute(
-        "UPDATE media SET is_motion_clip = 0 WHERE is_motion_clip = 1 AND content_hash NOT IN ("
+        "UPDATE media SET is_motion_clip = 0, "
+        "changed_seq = (SELECT COALESCE(MAX(changed_seq), 0) + 1 FROM media) "
+        "WHERE is_motion_clip = 1 AND content_hash NOT IN ("
         "  SELECT m2.content_hash FROM media m2 JOIN photos p2 ON p2.content_hash = m2.content_hash"
         "  WHERE p2.path IN (SELECT motion_path FROM media WHERE motion_path IS NOT NULL))"
     ).rowcount
@@ -675,7 +687,9 @@ def rebalance_month_bucket_dates(conn, folder_paths):
             continue
         newest_date = row["newest"][:10]
         conn.execute(
-            "UPDATE media SET moment_date = ? WHERE content_hash IN ("
+            "UPDATE media SET moment_date = ?, "
+            "changed_seq = (SELECT COALESCE(MAX(changed_seq), 0) + 1 FROM media) "
+            "WHERE content_hash IN ("
             "  SELECT p.content_hash FROM photos p WHERE p.path LIKE ? || '%'"
             "    AND instr(substr(p.path, length(?) + 1), '/') = 0"
             ")",
@@ -718,6 +732,7 @@ def backfill_moment_dates(library, root=None, verbose=False):
             "UPDATE media SET moment_date = ? WHERE content_hash = ?",
             (moment_date.isoformat(), r["content_hash"]),
         )
+        db.bump_changed_seq(conn, r["content_hash"])
         updated += 1
         touched_folders.add(path.parent)
         if verbose and updated % 200 == 0:
@@ -827,13 +842,15 @@ def index(library, root=None, cache=None, limit=None, verbose=False,
             moment_date = moment_date.isoformat() if moment_date else None
 
             conn.execute(
-                "INSERT INTO media (content_hash, mtime_ns, size, taken_at, width, height, is_video, duration, derived, motion_kind, motion_offset, moment_date) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(content_hash) DO UPDATE SET "
+                "INSERT INTO media (content_hash, mtime_ns, size, taken_at, width, height, is_video, duration, derived, motion_kind, motion_offset, moment_date, changed_seq) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?, (SELECT COALESCE(MAX(changed_seq), 0) + 1 FROM media)) "
+                "ON CONFLICT(content_hash) DO UPDATE SET "
                 "mtime_ns=excluded.mtime_ns, size=excluded.size, taken_at=excluded.taken_at, "
                 "width=excluded.width, height=excluded.height, is_video=excluded.is_video, "
                 "duration=excluded.duration, derived=excluded.derived, "
                 "motion_kind=excluded.motion_kind, motion_offset=excluded.motion_offset, "
-                "moment_date=excluded.moment_date",
+                "moment_date=excluded.moment_date, "
+                "changed_seq=(SELECT COALESCE(MAX(changed_seq), 0) + 1 FROM media)",
                 (chash, st.st_mtime_ns, st.st_size, taken, w, h, int(is_video), dur, int(ok),
                  m_kind, m_offset, moment_date),
             )

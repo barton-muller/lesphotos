@@ -1,12 +1,13 @@
 import {
   fetchMediaTimelinePaged,
-  fetchTimelineCount,
+  fetchTimelineDeltaPaged,
+  fetchTimelineMaxSeq,
   thumbsBatchUrl,
   thumbShardsManifestUrl,
   thumbShardUrl,
   type TimelineEntry,
 } from './api'
-import { db } from './db'
+import { db, type CachedPhoto } from './db'
 import { readStoredZip } from './miniZip'
 import { formatBytes, hasRoomFor, requestPersistentStorage } from './storage'
 import { invalidateThumbnail } from './thumbnails'
@@ -35,26 +36,43 @@ export function isLocalStorageError(err: unknown): boolean {
   )
 }
 
-// Last count seen from /timeline/count, persisted so the skip works from
-// a cold page load too, not just within one session.
-const LAST_COUNT_KEY = 'lesphotos-last-timeline-count'
+// Last changed_seq seen from the server (see docs/decisions/delta-sync.md),
+// persisted so both the short-circuit check and the choice of delta-vs-full
+// sync work from a cold page load too, not just within one session.
+// Replaces the old count-only LAST_COUNT_KEY: count missed a same-count
+// change (a favorite toggle, a rename) entirely, where changed_seq is
+// bumped by every write that matters to another device.
+const LAST_SEQ_KEY = 'lesphotos-last-changed-seq'
 
-function readLastCount(): number | null {
+function readLastSeq(): number | null {
   try {
-    const v = localStorage.getItem(LAST_COUNT_KEY)
+    const v = localStorage.getItem(LAST_SEQ_KEY)
     return v === null ? null : Number(v)
   } catch {
     return null
   }
 }
 
-function writeLastCount(n: number) {
+function writeLastSeq(n: number) {
   try {
-    localStorage.setItem(LAST_COUNT_KEY, String(n))
+    localStorage.setItem(LAST_SEQ_KEY, String(n))
   } catch {
     // Loses the skip optimisation only, never correctness - the next sync
     // just does a full relist as if this were the first one.
   }
+}
+
+// A photo's own moment never changes because of trash, but its path does:
+// deleting it moves it under library/trash/YYYY/YYYY-MM-DD/ (see
+// api.py's /photos/delete), which stays a fully ordinary media/photos row
+// - same id, same delta-sync treatment as any other move - just one the
+// default grid shouldn't render. Matches server-side filtering in
+// api.py's /timeline (no `since`) so "in the grid" means the same thing
+// whether a row arrived via full relist or delta. `path` is client-facing
+// (reorganize.client_path's "/photos/..." prefix, see api.ts's toApiPath),
+// not the bare library-relative path the server's own SQL filters on.
+function isTrashed(path: string): boolean {
+  return path.startsWith('/photos/trash/')
 }
 
 export interface SyncResult {
@@ -62,6 +80,157 @@ export interface SyncResult {
   updated: number
   removed: number
   total: number
+}
+
+function toNewCachedPhoto(r: TimelineEntry) {
+  return {
+    id: r.id,
+    path: r.path,
+    moment: r.moment,
+    momentPath: r.momentPath,
+    momentDate: r.momentDate,
+    date: r.date,
+    favorite: r.favorite ? (1 as const) : (0 as const),
+    // No blob yet - the tile fetches it on demand (useThumbnail) or
+    // the user asks for everything at once (downloadAllThumbnails).
+    width: r.width ?? 0,
+    height: r.height ?? 0,
+    isVideo: r.isVideo ? (1 as const) : (0 as const),
+    hasMotion: r.hasMotion ? (1 as const) : (0 as const),
+    duration: r.duration,
+  }
+}
+
+// Compares a fresh server row against what's cached and returns the row to
+// write, or null if nothing actually changed. Shared between the full
+// relist and the delta path so "what counts as changed" can't drift
+// between the two - see each field's own comment for why it's checked.
+function diffRow(cached: CachedPhoto | undefined, r: TimelineEntry): CachedPhoto | null {
+  if (!cached) return toNewCachedPhoto(r)
+  const changed =
+    cached.path !== r.path ||
+    cached.moment !== r.moment ||
+    cached.momentPath !== r.momentPath ||
+    // A photo's own moment doesn't change, but a sibling landing in
+    // its month bucket rebalances moment_date for the whole bucket
+    // (indexer.rebalance_month_bucket_dates) - without this, an
+    // existing cached row in that bucket would keep its stale sort
+    // key forever, the same class of bug this field exists to fix.
+    cached.momentDate !== r.momentDate ||
+    cached.date !== r.date ||
+    cached.favorite !== (r.favorite ? 1 : 0) ||
+    // Without this a photo that gains motion on a re-index would keep
+    // its stale row forever - the id is unchanged, so presence alone
+    // says nothing (see the note above).
+    cached.hasMotion !== (r.hasMotion ? 1 : 0)
+  if (!changed) return null
+  // Safe to spread the whole cached row now by construction, not by
+  // luck: CachedPhoto has no blob field to accidentally carry along
+  // into this bulkPut (thumbnailBlob lives in its own `thumbnails`
+  // table - db.ts's v9 schema). A metadata-only change no longer
+  // risks re-serializing an unrelated cached thumbnail.
+  return {
+    ...cached,
+    path: r.path,
+    moment: r.moment,
+    momentPath: r.momentPath,
+    momentDate: r.momentDate,
+    date: r.date,
+    favorite: r.favorite ? (1 as const) : (0 as const),
+    isVideo: r.isVideo ? (1 as const) : (0 as const),
+    hasMotion: r.hasMotion ? (1 as const) : (0 as const),
+    duration: r.duration,
+  }
+}
+
+// The delta path: fetch only what changed since the last sync (see
+// docs/decisions/delta-sync.md) instead of paging the whole library. Used
+// whenever a watermark is already cached; syncTimeline falls back to
+// fullRelist otherwise. A trashed row (isTrashed) is written like any
+// other move and then immediately deleted locally - it's a real,
+// delta-visible row server-side (api.py's /timeline?since= does not
+// filter it out), just one this client doesn't render, matching the
+// default listing's own server-side filter.
+async function deltaSync(
+  since: number,
+  onProgress?: (done: number, total: number) => void,
+): Promise<SyncResult> {
+  let added = 0
+  let updated = 0
+  let removed = 0
+  let done = 0
+
+  const maxSeq = await fetchTimelineDeltaPaged(since, async (page: TimelineEntry[]) => {
+    const toWrite: CachedPhoto[] = []
+    const toDelete: string[] = []
+    for (const r of page) {
+      if (isTrashed(r.path)) {
+        toDelete.push(r.id)
+        continue
+      }
+      const cached = await db.photos.get(r.id)
+      const row = diffRow(cached, r)
+      if (row) {
+        if (cached) updated += 1
+        else added += 1
+        toWrite.push(row)
+      }
+    }
+    if (toWrite.length) await db.photos.bulkPut(toWrite)
+    if (toDelete.length) {
+      removed += toDelete.length
+      await db.photos.bulkDelete(toDelete)
+    }
+    done += page.length
+    onProgress?.(done, done)
+  })
+
+  writeLastSeq(maxSeq)
+  return { added, updated, removed, total: await db.photos.count() }
+}
+
+// The full-relist path: pages the entire visible timeline and diffs every
+// row against IndexedDB. Used for a device's first sync (no cached
+// watermark yet) or when the server has no maxSeq to offer (an old server
+// predating delta sync) - see syncTimeline.
+async function fullRelist(onProgress?: (done: number, total: number) => void): Promise<SyncResult> {
+  // Cached rows, not just their keys: photo_id is stable across moves by
+  // design, so "already cached" does NOT imply "unchanged". A renamed
+  // moment keeps every photo's id while changing its moment/path, and an
+  // id-presence check alone would skip the row and leave it showing the old
+  // name forever - the exact bug that made rename appear to do nothing
+  // under the PhotoView backend (see CLAUDE.md).
+  const cachedById = new Map((await db.photos.toArray()).map((p) => [p.id, p]))
+  const remoteIds = new Set<string>()
+
+  let added = 0
+  let updated = 0
+  // Total is unknown until the last (short) page arrives, so progress is
+  // reported as "done so far" against itself until then - the caller
+  // renders that as "N photos" rather than "N/M", which is honest about
+  // what is actually known partway through a stream.
+  let done = 0
+
+  await fetchMediaTimelinePaged(async (page: TimelineEntry[]) => {
+    const toWrite: CachedPhoto[] = []
+    for (const r of page) {
+      remoteIds.add(r.id)
+      const row = diffRow(cachedById.get(r.id), r)
+      if (row) {
+        if (cachedById.has(r.id)) updated += 1
+        else added += 1
+        toWrite.push(row)
+      }
+    }
+    if (toWrite.length) await db.photos.bulkPut(toWrite)
+    done += page.length
+    onProgress?.(done, done)
+  })
+
+  const removedIds = [...cachedById.keys()].filter((id) => !remoteIds.has(id))
+  if (removedIds.length) await db.photos.bulkDelete(removedIds)
+
+  return { added, updated, removed: removedIds.length, total: remoteIds.size }
 }
 
 // Metadata only, streamed one server page at a time rather than buffered
@@ -88,120 +257,36 @@ export async function syncTimeline(
   // cache just stays eviction-eligible, as it was before this call existed.
   void requestPersistentStorage()
 
-  // Cheap check first: a full relist is a real cost (~700KB / one request
-  // per 500 photos - measured 10s over Tailscale at 4,000 photos), and
-  // most syncs - the foreground-refresh ones especially - find nothing
-  // changed. Skips the relist when the count matches; does NOT catch a
-  // favorite toggle or rename with no count change (those still show up
-  // on the next add/delete, or via "Sync now"). A locally-cached count
-  // that predates any photos existing (0) never short-circuits the very
+  // Cheap check first (see docs/decisions/delta-sync.md): most syncs - the
+  // foreground-refresh ones especially - find nothing changed at all, and
+  // a full relist is a real cost even now that changes fetch is possible
+  // (~700KB / one request per 500 photos - measured 10s over Tailscale at
+  // 4,000 photos). maxSeq catches every write that matters to another
+  // device (a favorite toggle, a rename, not just additions/deletions -
+  // the gap the old count-only check had). A locally-cached seq that
+  // predates any photos existing (null) never short-circuits the very
   // first sync, since a fresh device also has nothing in IndexedDB to skip
   // to - the emptiness would be self-inconsistent, not just stale.
-  const lastCount = readLastCount()
+  const lastSeq = readLastSeq()
   const cachedCount = await db.photos.count()
-  if (lastCount !== null && cachedCount > 0) {
-    const remoteCount = await fetchTimelineCount()
-    if (remoteCount === lastCount && remoteCount === cachedCount) {
-      return { added: 0, updated: 0, removed: 0, total: remoteCount }
+  if (lastSeq !== null && cachedCount > 0) {
+    const remoteMaxSeq = await fetchTimelineMaxSeq()
+    if (remoteMaxSeq === lastSeq) {
+      return { added: 0, updated: 0, removed: 0, total: cachedCount }
     }
+    // Something changed since lastSeq - fetch only that delta rather than
+    // the whole library. This is the fix for "adding one photo costs a
+    // full relist": O(what changed), not O(library size).
+    return deltaSync(lastSeq, onProgress)
   }
 
-  // Cached rows, not just their keys: photo_id is stable across moves by
-  // design, so "already cached" does NOT imply "unchanged". A renamed
-  // moment keeps every photo's id while changing its moment/path, and an
-  // id-presence check alone would skip the row and leave it showing the old
-  // name forever - the exact bug that made rename appear to do nothing
-  // under the PhotoView backend (see CLAUDE.md).
-  //
-  // This toArray() runs on every sync, including the routine one that fires
-  // on every foreground/focus - not just first login. Before db.ts's v9
-  // schema split, `photos` rows carried thumbnailBlob inline, so this read
-  // deserialized every cached thumbnail in the library on every single
-  // foreground event, only to discard the reference below. Rows are
-  // metadata-only now, so this is cheap regardless of library size.
-  const cachedById = new Map((await db.photos.toArray()).map((p) => [p.id, p]))
-  const remoteIds = new Set<string>()
-
-  let added = 0
-  let updated = 0
-  // Total is unknown until the last (short) page arrives, so progress is
-  // reported as "done so far" against itself until then - the caller
-  // renders that as "N photos" rather than "N/M", which is honest about
-  // what is actually known partway through a stream.
-  let done = 0
-
-  await fetchMediaTimelinePaged(async (page: TimelineEntry[]) => {
-    const rows = await Promise.all(
-      page.map(async (r) => {
-        remoteIds.add(r.id)
-        const cached = cachedById.get(r.id)
-        if (!cached) {
-          added += 1
-          return {
-            id: r.id,
-            path: r.path,
-            moment: r.moment,
-            momentPath: r.momentPath,
-            momentDate: r.momentDate,
-            date: r.date,
-            favorite: r.favorite ? (1 as const) : (0 as const),
-            // No blob yet - the tile fetches it on demand (useThumbnail) or
-            // the user asks for everything at once (downloadAllThumbnails).
-            width: r.width ?? 0,
-            height: r.height ?? 0,
-            isVideo: r.isVideo ? (1 as const) : (0 as const),
-            hasMotion: r.hasMotion ? (1 as const) : (0 as const),
-            duration: r.duration,
-          }
-        }
-        const changed =
-          cached.path !== r.path ||
-          cached.moment !== r.moment ||
-          cached.momentPath !== r.momentPath ||
-          // A photo's own moment doesn't change, but a sibling landing in
-          // its month bucket rebalances moment_date for the whole bucket
-          // (indexer.rebalance_month_bucket_dates) - without this, an
-          // existing cached row in that bucket would keep its stale sort
-          // key forever, the same class of bug this field exists to fix.
-          cached.momentDate !== r.momentDate ||
-          cached.date !== r.date ||
-          cached.favorite !== (r.favorite ? 1 : 0) ||
-          // Without this a photo that gains motion on a re-index would keep
-          // its stale row forever - the id is unchanged, so presence alone
-          // says nothing (see the note above).
-          cached.hasMotion !== (r.hasMotion ? 1 : 0)
-        if (!changed) return null
-        updated += 1
-        // Safe to spread the whole cached row now by construction, not by
-        // luck: CachedPhoto has no blob field to accidentally carry along
-        // into this bulkPut (thumbnailBlob lives in its own `thumbnails`
-        // table - db.ts's v9 schema). A metadata-only change no longer
-        // risks re-serializing an unrelated cached thumbnail.
-        return {
-          ...cached,
-          path: r.path,
-          moment: r.moment,
-          momentPath: r.momentPath,
-          momentDate: r.momentDate,
-          date: r.date,
-          favorite: r.favorite ? (1 as const) : (0 as const),
-          isVideo: r.isVideo ? (1 as const) : (0 as const),
-          hasMotion: r.hasMotion ? (1 as const) : (0 as const),
-          duration: r.duration,
-        }
-      }),
-    )
-    const toWrite = rows.filter((r): r is NonNullable<typeof r> => r !== null)
-    if (toWrite.length) await db.photos.bulkPut(toWrite)
-    done += page.length
-    onProgress?.(done, done)
-  })
-
-  const removedIds = [...cachedById.keys()].filter((id) => !remoteIds.has(id))
-  if (removedIds.length) await db.photos.bulkDelete(removedIds)
-
-  writeLastCount(remoteIds.size)
-  return { added, updated, removed: removedIds.length, total: remoteIds.size }
+  // No cached watermark: first sync on this device (or old cached state
+  // from before delta sync existed). Full relist is the only option - it
+  // also establishes the watermark for every sync after this one.
+  const result = await fullRelist(onProgress)
+  const maxSeq = await fetchTimelineMaxSeq()
+  writeLastSeq(maxSeq)
+  return result
 }
 
 // The explicit, expensive action: download every thumbnail so the library

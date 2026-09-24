@@ -15,6 +15,16 @@ export function toApiPath(photoviewPath: string): string {
   return photoviewPath.startsWith(prefix) ? photoviewPath.slice(prefix.length) : photoviewPath
 }
 
+// A rename/merge whose moment_path no longer exists on disk - another
+// device already renamed/merged/deleted it - gets a clean 409 from
+// _run_reorganize server-side (api.py), rather than a crash. Matches the
+// `/\(401\)/` pattern App.tsx/sync.ts already use for the same reason:
+// post() only embeds the status in the thrown Error's message, not as a
+// structured field.
+export function isStaleEditError(err: unknown): boolean {
+  return err instanceof Error && /\(409\)/.test(err.message)
+}
+
 async function post<T>(path: string, body: unknown): Promise<T> {
   const resp = await fetch(`${API_BASE}${path}`, {
     method: 'POST',
@@ -115,6 +125,10 @@ export interface TimelineEntry {
   // video actually lives - a sibling file or embedded in this one - is
   // the server's problem; the client just asks /media/{id}/motion.
   hasMotion: boolean
+  // Only present on a /timeline?since= response (see fetchTimelineDeltaPaged)
+  // - the server's change-feed cursor for this row. Absent on the plain
+  // paginated response, which has no concept of a cursor.
+  changedSeq?: number
 }
 
 // Paged rather than fetched whole: the server caps `limit`, because at the
@@ -133,6 +147,55 @@ export async function fetchTimelineCount(): Promise<number> {
   })
   if (!resp.ok) throw new Error(`timeline count failed (${resp.status})`)
   return (await resp.json()).count
+}
+
+// The cheap "did anything change at all" check a delta sync makes before
+// paying for a /timeline?since= fetch - see docs/decisions/delta-sync.md.
+// Unlike fetchTimelineCount, this also catches a same-count change (a
+// favorite toggle, a rename) since changed_seq is bumped by every write
+// that matters to another device, not just additions/deletions.
+export async function fetchTimelineMaxSeq(): Promise<number> {
+  const resp = await fetch(`${API_BASE}/timeline/max-seq`, {
+    credentials: 'include',
+    cache: 'no-store',
+  })
+  if (!resp.ok) throw new Error(`timeline max-seq failed (${resp.status})`)
+  return (await resp.json()).maxSeq
+}
+
+export interface TimelineDeltaPage {
+  items: TimelineEntry[]
+  maxSeq: number
+}
+
+// One page of "everything touched after `since`" - a change feed, not a
+// display page, so it has no `moment`-based ordering and no `offset`
+// (changed_seq only ever grows, so the next page always starts after the
+// previous page's own `maxSeq`, which the server computes as this page's
+// LAST row's changedSeq - see api.py's /timeline docstring for why that
+// must be a per-page value, not the library's global max, or a truncated
+// page would let the client skip rows it never actually saw). Loops
+// defensively, the same shape fetchMediaTimelinePaged uses, in case a
+// long-offline device has accumulated a delta bigger than one page.
+export async function fetchTimelineDeltaPaged(
+  since: number,
+  onPage: (page: TimelineEntry[]) => void | Promise<void>,
+  pageSize = 500,
+): Promise<number> {
+  let cursor = since
+  for (;;) {
+    const resp = await fetch(`${API_BASE}/timeline?since=${cursor}&limit=${pageSize}`, {
+      credentials: 'include',
+      cache: 'no-store',
+    })
+    if (!resp.ok) throw new Error(`timeline delta failed (${resp.status})`)
+    const page: TimelineDeltaPage = await resp.json()
+    if (page.items.length) await onPage(page.items)
+    // An empty/short page means this was the last one - the server
+    // returns exactly `limit` items whenever more exist (see api.py).
+    if (page.items.length < pageSize) return page.maxSeq
+    cursor = page.maxSeq
+  }
 }
 
 export async function fetchMediaTimeline(pageSize = 500): Promise<TimelineEntry[]> {

@@ -77,6 +77,7 @@ def connect(library):
         ("motion_offset", "INTEGER"),
         ("is_motion_clip", "INTEGER NOT NULL DEFAULT 0"),
         ("moment_date", "TEXT"),
+        ("changed_seq", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if col not in media_cols:
             conn.execute(f"ALTER TABLE media ADD COLUMN {col} {decl}")
@@ -84,6 +85,7 @@ def connect(library):
         conn.commit()
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_motion ON media(is_motion_clip)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_media_moment_date ON media(moment_date DESC)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_media_changed_seq ON media(changed_seq)")
     # WAL lets the indexer write while the API serves reads, instead of the
     # two blocking each other - the indexer is a long-running writer, which
     # is exactly the case rollback-journal mode handles worst. NORMAL sync
@@ -103,6 +105,33 @@ def content_hash_of(path):
     return h.hexdigest()
 
 
+def bump_changed_seq(conn, content_hash):
+    """
+    Advances the shared changed_seq counter and stamps it onto one media
+    row, so a delta /timeline?since= fetch (see docs/decisions/delta-sync.md)
+    can find it. Every write path that should be visible to another device
+    without a full relist calls this - see CLAUDE.md's note on this file for
+    the list.
+
+    No-ops (silently) for a content_hash with no media row yet - a `photos`
+    row can be upserted before its `media` counterpart exists (e.g.
+    mid-index, or a photo that failed to derive), and there is nothing to
+    stamp a sequence onto until indexing gives it one. That first media
+    INSERT bumps its own changed_seq itself.
+
+    MAX(changed_seq)+1 rather than a separate counter table: this table is
+    already the thing every delta reader scans, so the two never drift, and
+    at this project's write volume (one interactive user's actions, plus an
+    indexer that already serializes its own writes) the extra read costs
+    nothing worth avoiding a second moving part for.
+    """
+    conn.execute(
+        "UPDATE media SET changed_seq = (SELECT COALESCE(MAX(changed_seq), 0) + 1 FROM media) "
+        "WHERE content_hash = ?",
+        (content_hash,),
+    )
+
+
 def upsert_photo(conn, content_hash, path, favorite=None):
     existing = conn.execute(
         "SELECT favorite, path, photo_id FROM photos WHERE content_hash = ?", (content_hash,)
@@ -119,6 +148,10 @@ def upsert_photo(conn, content_hash, path, favorite=None):
         "ON CONFLICT(content_hash) DO UPDATE SET path = excluded.path, favorite = excluded.favorite",
         (content_hash, str(path), int(favorite), photo_id),
     )
+    # A path or favorite change here is exactly what a delta client needs to
+    # learn about (a move, a rename target, a favorite toggle) - bump before
+    # commit so it lands in the same transaction as the row it describes.
+    bump_changed_seq(conn, content_hash)
     conn.commit()
     # Refresh the export if this photo is (or was) favorited, so a move that
     # relocates a favorited photo keeps stars.json's path field accurate,
@@ -133,6 +166,7 @@ def set_favorite(conn, content_hash, favorite):
         "UPDATE photos SET favorite = ? WHERE content_hash = ?",
         (int(favorite), content_hash),
     )
+    bump_changed_seq(conn, content_hash)
     conn.commit()
     export_stars_json(conn)
 

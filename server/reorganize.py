@@ -449,6 +449,7 @@ def _reindex_moved(conn, moved_paths):
             "UPDATE media SET mtime_ns = ?, size = ?, moment_date = ? WHERE content_hash = ?",
             (st.st_mtime_ns, st.st_size, moment_date.isoformat() if moment_date else None, row["content_hash"]),
         )
+        db.bump_changed_seq(conn, row["content_hash"])
         touched_folders.add(Path(path).parent)
     conn.commit()
     # A month-only bucket's moment_date tracks its newest photo, not a
@@ -513,7 +514,8 @@ def rename_moment(library, moment_path, new_label, new_date=None):
     # the old folder. Rewrite the prefix rather than re-pairing: the files
     # are untouched, only their parent's name changed.
     conn.execute(
-        "UPDATE media SET motion_path = ? || substr(motion_path, ?) "
+        "UPDATE media SET motion_path = ? || substr(motion_path, ?), "
+        "changed_seq = (SELECT COALESCE(MAX(changed_seq), 0) + 1 FROM media) "
         "WHERE motion_path LIKE ?",
         (str(new_path), len(str(moment_path)) + 1, str(moment_path) + "%"),
     )
@@ -637,6 +639,7 @@ def _repair_motion_paths(conn, moved_paths):
                 "UPDATE media SET motion_path = ? WHERE content_hash = ?",
                 (str(new_clip), row["content_hash"]),
             )
+            db.bump_changed_seq(conn, row["content_hash"])
     conn.commit()
 
 
@@ -660,7 +663,11 @@ def _move_photos_no_scan(conn, photo_paths, dest_moment_path):
     if missing:
         raise FileNotFoundError(f"{len(missing)} photo(s) no longer exist on disk: {missing}")
 
-    dest_moment_path.mkdir(exist_ok=True)
+    # parents=True: every existing caller's destination sits directly under
+    # an already-existing year folder (or the library root), so this used
+    # to be a no-op distinction - but /photos/delete's trash/YYYY/YYYY-MM-DD/
+    # can need two new levels at once on a library's first-ever delete.
+    dest_moment_path.mkdir(parents=True, exist_ok=True)
 
     moved_paths = []
     for f in photo_paths:

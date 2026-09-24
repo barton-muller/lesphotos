@@ -17,6 +17,7 @@ import io
 import logging
 import os
 import re
+import time
 import zipfile
 from datetime import timedelta
 from pathlib import Path
@@ -217,6 +218,50 @@ def create_moment(req: CreateMomentRequest, sess: Session = Depends(current)):
     }
 
 
+class DeletePhotosRequest(BaseModel):
+    photo_paths: list[str]
+
+
+@app.post("/photos/delete")
+def delete_photos(req: DeletePhotosRequest, sess: Session = Depends(current)):
+    """
+    Moves selected photos to library/trash/YYYY/YYYY-MM-DD/ - a real,
+    walked moment folder (see docs/decisions/delta-sync.md), not a hidden
+    sidecar path. That matters: .lesphotos/ is skipped by the indexer's own
+    walk (it has to be, or the indexer would try to index its own cache),
+    so anything living there is invisible to a full re-index and would be
+    silently lost forever on a rebuilt appdb. A plain top-level folder
+    keeps trashed photos exactly as rebuildable as everything else -
+    invariant #1 - and makes "restore" trivial later: move the file back,
+    same as moving it anywhere else.
+
+    Today's date, not each photo's own, so repeated deletes land in
+    different folders and a future GC sweep can read "how old is this
+    batch" straight from the folder name. Reuses move_photos - the same
+    validated-move primitive rename/merge/create-moment already share - so
+    a Live Photo's clip moves with its still, motion_path gets repaired,
+    and a stale client-supplied path still gets a clean 409 instead of a
+    crash. No new filesystem logic; a delete is just a move to a
+    known destination.
+    """
+    if not req.photo_paths:
+        raise HTTPException(status_code=400, detail="no photos selected")
+
+    host_paths = [_resolve_host_path(sess.library, p) for p in req.photo_paths]
+    today = time.strftime("%Y-%m-%d")
+    dest_dir = sess.library.photos_root / "trash" / today[:4] / today
+
+    moved = _run_reorganize(
+        reorganize.move_photos, sess.library, host_paths, dest_dir
+    )
+
+    return {
+        "ok": True,
+        "new_path": str(dest_dir.relative_to(sess.library.photos_root)),
+        "moved_count": len(moved),
+    }
+
+
 class SuggestNameRequest(BaseModel):
     moment_path: str
 
@@ -350,14 +395,9 @@ def timeline_count(sess: Session = Depends(current)):
     """
     How many photos are visible in the timeline, cheaply.
 
-    Lets the client skip a full relist (paginated /timeline, ~700KB /
-    5 sequential round-trips at 2,298 photos - measured at 10s over
-    Tailscale on 4,000) on every foreground refresh when nothing has
-    changed. Deliberately just a count, not a general change-detection
-    signal: it catches additions and deletions, which is the common case,
-    but NOT a favorite toggle or rename with no count change. Accepted
-    trade-off - those are rare and "Sync now" covers them - rather than
-    adding a real updated_at column touched by every write path.
+    Superseded by /timeline/max-seq for sync.ts's own short-circuit check
+    (see that endpoint's docstring for why), but kept as a cheap read for
+    any other caller that only cares about the display count.
     """
     conn = db.connect(sess.library)
     n = conn.execute(
@@ -367,15 +407,39 @@ def timeline_count(sess: Session = Depends(current)):
     return {"count": n}
 
 
+@app.get("/timeline/max-seq")
+def timeline_max_seq(sess: Session = Depends(current)):
+    """
+    The highest changed_seq in the library, cheaply - what a delta sync
+    compares against its own last-seen value to decide whether anything
+    changed at all before paying for a /timeline?since= fetch.
+
+    Replaces /timeline/count as sync.ts's short-circuit check: count only
+    catches additions/deletions, silently missing a favorite toggle or a
+    rename with no count change (see docs/decisions/delta-sync.md) - those
+    used to wait for "Sync now" or a lucky full relist. changed_seq is
+    bumped by every write that should be visible to another device (see
+    db.bump_changed_seq's callers), so this one number covers all of them.
+    """
+    conn = db.connect(sess.library)
+    n = conn.execute("SELECT COALESCE(MAX(changed_seq), 0) c FROM media").fetchone()["c"]
+    conn.close()
+    return {"maxSeq": n}
+
+
 @app.get("/timeline")
 def timeline(
     response: Response,
     limit: int = Query(default=500, le=2000),
     offset: int = Query(default=0, ge=0),
+    since: int | None = Query(default=None, ge=0),
     sess: Session = Depends(current),
 ):
     """
-    One page of the timeline, newest first.
+    One page of the timeline, newest first - or, with `since`, a delta feed
+    of every row touched after that changed_seq (see
+    docs/decisions/delta-sync.md), which is what makes a routine sync O(what
+    changed) instead of O(library size).
 
     Deliberately paginated with a hard ceiling rather than offering a
     "give me everything" mode: at the ~5TB target a full-library response
@@ -385,7 +449,9 @@ def timeline(
 
     Ordered by the MOMENT's date - the date parsed from the containing
     directory's own name (see moment_dates.py) - and only then by capture
-    time within that moment.
+    time within that moment. `since` mode instead orders by changed_seq
+    (a change feed, not a display order) - moment-date order has no
+    meaning across a set of rows that may span the whole library's history.
 
     A moment IS a directory (invariant #3) and its name is what the user sees
     and renames, so the name has to be what decides where it appears. Ordering
@@ -402,28 +468,50 @@ def timeline(
     every other column in appdb. Sorts on a plain indexed column instead of
     a full per-row string derivation.
 
+    Trash (library/trash/YYYY/YYYY-MM-DD/ - see /photos/delete) is excluded
+    from the default (no `since`) listing by path prefix, same as any other
+    moment would be included: it's a real, indexed moment, just one the
+    everyday grid doesn't show. `since` mode does NOT exclude it - a
+    trashed photo is a hidden moment, not a deletion, so a delta client
+    sees it arrive with its new trash path like any other move and can
+    choose to stop showing it (see sync.ts), the same way the default
+    listing does server-side. This is what lets a future "view trash"
+    toggle be "stop filtering," not a new endpoint.
+
     no-store for the same reason as /photo-ids: this changes on every
     reorganize, and a silently-cached GET here would resurrect exactly the
     "created a moment, synced fine, still not visible" class of bug.
     """
     response.headers["Cache-Control"] = "no-store"
     conn = db.connect(sess.library)
-    rows = conn.execute(
-        "SELECT p.photo_id, p.path, p.favorite, m.taken_at, m.width, m.height, m.motion_kind, "
-        "       m.is_video, m.duration, m.moment_date "
-        "FROM media m JOIN photos p ON p.content_hash = m.content_hash "
-        "WHERE m.derived = 1 AND m.is_motion_clip = 0 "
-        # photo_id last as a tiebreaker: LIMIT/OFFSET paging is only
-        # stable if the sort is total, and photos sharing a moment date
-        # AND a taken_at (a burst, or anything falling back to the same
-        # file mtime) are otherwise free to order differently between one
-        # page query and the next - which drops or duplicates rows at the
-        # page boundary. moment_date NULL (no parseable prefix) sorts last
-        # under DESC, same as the old ''-sorts-last behaviour.
-        "ORDER BY m.moment_date DESC, m.taken_at DESC, p.photo_id "
-        "LIMIT ? OFFSET ?",
-        (limit, offset),
-    ).fetchall()
+    trash_prefix = str(sess.library.photos_root / "trash") + os.sep
+    if since is not None:
+        rows = conn.execute(
+            "SELECT p.photo_id, p.path, p.favorite, m.taken_at, m.width, m.height, m.motion_kind, "
+            "       m.is_video, m.duration, m.moment_date, m.changed_seq "
+            "FROM media m JOIN photos p ON p.content_hash = m.content_hash "
+            "WHERE m.changed_seq > ? AND m.is_motion_clip = 0 "
+            "ORDER BY m.changed_seq ASC "
+            "LIMIT ?",
+            (since, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT p.photo_id, p.path, p.favorite, m.taken_at, m.width, m.height, m.motion_kind, "
+            "       m.is_video, m.duration, m.moment_date, m.changed_seq "
+            "FROM media m JOIN photos p ON p.content_hash = m.content_hash "
+            "WHERE m.derived = 1 AND m.is_motion_clip = 0 AND p.path NOT LIKE ? || '%' "
+            # photo_id last as a tiebreaker: LIMIT/OFFSET paging is only
+            # stable if the sort is total, and photos sharing a moment date
+            # AND a taken_at (a burst, or anything falling back to the same
+            # file mtime) are otherwise free to order differently between one
+            # page query and the next - which drops or duplicates rows at the
+            # page boundary. moment_date NULL (no parseable prefix) sorts last
+            # under DESC, same as the old ''-sorts-last behaviour.
+            "ORDER BY m.moment_date DESC, m.taken_at DESC, p.photo_id "
+            "LIMIT ? OFFSET ?",
+            (trash_prefix, limit, offset),
+        ).fetchall()
     out = []
     for r in rows:
         # A row whose path is outside PHOTOS_ROOT can't be expressed as a
@@ -462,6 +550,25 @@ def timeline(
             # come from is /media/{id}/motion's problem.
             "hasMotion": r["motion_kind"] is not None,
         })
+        if since is not None:
+            out[-1]["changedSeq"] = r["changed_seq"]
+    if since is not None:
+        # Wrapped, not a bare array, so a client can tell "delta response"
+        # apart from the plain paginated shape without guessing from
+        # request params alone.
+        #
+        # max_seq here is the LAST ROW IN THIS PAGE's changed_seq, not the
+        # library's global max - critical when `limit` truncates the page:
+        # if the client advanced its cursor to the global max after only
+        # seeing a partial page, every row between this page's end and the
+        # global max would be silently skipped forever (they're all
+        # `changed_seq <= since` on the client's next call, so they'd never
+        # be asked for again). An empty page (nothing new) has no last row
+        # to take this from, so it falls back to `since` unchanged - correct,
+        # since nothing advanced.
+        max_seq = out[-1]["changedSeq"] if out else since
+        conn.close()
+        return {"items": out, "maxSeq": max_seq}
     conn.close()
     return out
 

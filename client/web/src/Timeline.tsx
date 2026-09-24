@@ -1,7 +1,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
-import { createMomentFromPhotos, mergeMoments, renameMoment, suggestMomentName } from './api'
+import { createMomentFromPhotos, isStaleEditError, mergeMoments, renameMoment, suggestMomentName } from './api'
 import { db, getPhotosVersion, subscribePhotosVersion, type PhotoMeta } from './db'
 import { toggleFavorite } from './favorites'
 import { useThumbnail } from './useThumbnail'
@@ -463,7 +463,16 @@ function MomentHeader({
       // rows on screen.
       onNeedsSync()
     } catch (err) {
-      setStatus(`Rename failed: ${err instanceof Error ? err.message : String(err)}`)
+      // A stale path means another device already changed this moment -
+      // resync so this client catches up to the real state instead of
+      // just showing a dead-end error for a "failure" that already
+      // succeeded elsewhere.
+      if (isStaleEditError(err)) {
+        setStatus('This moment changed elsewhere - refreshing…')
+        onNeedsSync()
+      } else {
+        setStatus(`Rename failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
     }
   }
 
@@ -1084,7 +1093,12 @@ export function Timeline({
       setMergeLabel('')
       onNeedsSync()
     } catch (err) {
-      setMergeStatus(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      if (isStaleEditError(err)) {
+        setMergeStatus('One of these moments changed elsewhere - refreshing…')
+        onNeedsSync()
+      } else {
+        setMergeStatus(`Failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
     }
   }
 

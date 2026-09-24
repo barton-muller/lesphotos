@@ -44,7 +44,16 @@ CREATE TABLE IF NOT EXISTS media (
     -- NULL for a folder with no parseable date prefix - sorts last.
     -- Derived from the path, like everything else here: rebuildable by
     -- re-indexing, never a second source of truth for the folder name.
-    moment_date TEXT
+    moment_date TEXT,
+    -- Monotonic change counter, bumped by db.bump_changed_seq() on every
+    -- write that should be visible to a delta /timeline?since= fetch (see
+    -- docs/decisions/delta-sync.md). NOT an alias for sqlite's own rowid:
+    -- content_hash is this table's PRIMARY KEY and it's TEXT, so rowid
+    -- exists as a hidden column but was never something client code could
+    -- name or rely on - this column is the real, explicit, indexed cursor.
+    -- 0 for a row that predates this column (pre-migration), which a
+    -- since=0 delta fetch naturally treats as "already known", not new.
+    changed_seq INTEGER NOT NULL DEFAULT 0
 );
 
 -- The timeline query is ORDER BY taken_at DESC with a LIMIT/OFFSET, so this
@@ -52,6 +61,11 @@ CREATE TABLE IF NOT EXISTS media (
 -- row in the library.
 CREATE INDEX IF NOT EXISTS idx_media_taken_at ON media(taken_at DESC);
 CREATE INDEX IF NOT EXISTS idx_media_derived ON media(derived);
+
+-- idx_media_changed_seq is created by db.connect() AFTER its column
+-- migration, not here - same reason as idx_media_motion below: on a
+-- pre-existing database this script runs before changed_seq exists, and
+-- indexing a missing column is a hard error.
 
 -- Live Photo / Motion Photo linkage (see docs/decisions/live-and-motion-photos.md).
 --
