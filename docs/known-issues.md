@@ -66,16 +66,31 @@ returns `200`). This entry tracks what's left to finish the rollout:
       without error. Or check directly:
       `curl -X POST http://localhost:8001/lesphotos-api/favorite -b <alice's session
       cookie> -d '{"path": "...", "favorite": true}'`.
-- [ ] **Point the watcher at `lesphotos`.** Still runs as `root` (ad hoc, started via
-      `sudo`). Needs the same account switch the API server already got. Since it's a
-      separate daemon (see `server/watcher.py`'s own docstring for why), this is a
-      second, independent restart from the API server's.
-- [ ] **Task Scheduler entries.** Everything above was done via manual `sudo -u
-      lesphotos <command>` over SSH — nothing survives a reboot yet. DSM Task
-      Scheduler's own "Run as" user dropdown does list `lesphotos` (confirmed), so both
-      the API server task and the watcher task need their "Run as" changed from
-      `alice`/whatever they're currently set to, over to `lesphotos`. See
-      `deploy/README.md`'s restart section for the exact commands each task should run.
+- [x] **The watcher deliberately stays `root` — not moving to `lesphotos`.** Decided
+      2026-09-25: a plain `lesphotos` service account can `chgrp`/`chmod` files it
+      owns, but a newly-arrived phone upload is owned by *the DSM user whose phone
+      backed it up* (`Bob`, `Alice`, ...), not `lesphotos` — only `root` can fix
+      permissions on a file it doesn't own. `handle_new_file` in `server/watcher.py`
+      now calls `_grant_lesphotos_group_read()` right after every move: `chgrp
+      lesphotos-service` + `chmod g+r` on the moved file, so new uploads become
+      readable by the API server immediately, not just after a later manual sweep.
+      Without this, every future phone upload would silently reproduce the exact
+      favoriting-500 bug this investigation fixed, forever, for the newest photos.
+      Resolves the gid once at import (`grp.getgrnam`, cached in `_LESPHOTOS_GID`),
+      degrades to a no-op with one warning on a machine with no such group (e.g. a
+      Mac dev checkout) rather than crashing file handling. Best-effort, not
+      load-bearing: the move itself already succeeded even if this fails, and a
+      later manual `chgrp`/`chmod` sweep (like the one used to fix the existing
+      library) can always catch up.
+- [ ] **Task Scheduler entries.** Everything done so far was via manual `sudo -u
+      lesphotos <command>` (API server) or plain `sudo` (watcher, staying `root` per
+      above) over SSH — nothing survives a reboot yet. DSM Task Scheduler's own
+      "Run as" user dropdown does list `lesphotos` (confirmed), so the API server
+      task's "Run as" needs changing from `alice` to `lesphotos`; the watcher task's
+      "Run as" stays as whatever currently gives it root (`sudo`, or already running
+      as an account with sufficient privilege — check what it's actually configured
+      as before assuming). See `deploy/README.md`'s restart section for the exact
+      commands each task should run.
 - [ ] Update `deploy/README.md` once Task Scheduler is updated, so the documented
       restart procedure matches reality (it currently still describes restarting as
       `alice`/root via plain `sudo`, not `sudo -u lesphotos`).
@@ -113,9 +128,12 @@ the app entirely. Confirmed nobody uses that DSM feature; closed as part of this
 
 A new DSM account, `lesphotos` — **non-admin** (DSM admins bypass all file permissions
 outright, so making it admin was tried once, found to defeat the entire point, and
-reverted before it was used for anything) — now runs the API server (and will run the
-watcher). Filesystem access is granted via a **plain Unix group**,
-`lesphotos-service`, containing only `lesphotos`, set as each `Photos/` folder's group.
+reverted before it was used for anything) — now runs the API server. **The watcher
+deliberately stays `root`**, not `lesphotos` — see "Remaining rollout" above for why:
+it needs to fix permissions on files it doesn't own (a new phone upload arrives owned
+by whichever DSM user's phone backed it up), which only `root` can do. Filesystem
+access for the API server is granted via a **plain Unix group**, `lesphotos-service`,
+containing only `lesphotos`, set as each `Photos/` folder's group.
 
 **Two chmod passes were needed per library, not one** — this was the single biggest
 time-sink of the whole fix, worth remembering clearly:

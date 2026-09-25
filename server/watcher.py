@@ -21,13 +21,23 @@ For each new file under a watched folder:
   3. move it into <library root>/<YYYY>/<YYYY-MM>/<original filename> -
      NOT a full YYYY-MM-DD-moment; that's auto_generate_moments' job,
      run periodically, separately, on this intermediate shape
-  4. tell Synology's own index about the move (synoindex -n) so its
+  4. fix the moved file's group so the lesphotos service account can read
+     it (see docs/known-issues.md's "lesphotos service account" writeup) -
+     a phone-backup app writes new files owner-only (mode 700), and
+     shutil.move preserves that as-is, so without this step every new
+     upload would silently reproduce the exact favoriting-500 bug that
+     investigation fixed, forever, for the newest photos specifically.
+     This is WHY the watcher stays root instead of moving to lesphotos
+     with everything else - root can chgrp/chmod a file it doesn't own;
+     a plain lesphotos service account cannot.
+  5. tell Synology's own index about the move (synoindex -n) so its
      mobile-backup dedup and @eaDir bookkeeping stay consistent
-  5. index just that one destination folder - cheap (a handful of files,
+  6. index just that one destination folder - cheap (a handful of files,
      not the whole library) and immediately makes the photo visible to
      the running server, since /timeline/count is a live, uncached query
 """
 
+import grp
 import logging
 import os
 import shutil
@@ -57,6 +67,18 @@ _STABLE_TIMEOUT_S = 120
 
 SYNOINDEX_BIN = "/usr/syno/bin/synoindex"
 
+# The lesphotos service account's own group (see docs/known-issues.md's
+# "lesphotos service account" writeup) - granting this group read access
+# to a moved file is what lets the (non-root) API server read a photo it
+# doesn't own. Resolved once at import time, not per-file: a dev machine
+# with no such group logs one warning and every subsequent fixup is
+# skipped, rather than repeating a doomed getgrnam() lookup per photo.
+_LESPHOTOS_GROUP = "lesphotos-service"
+try:
+    _LESPHOTOS_GID: int | None = grp.getgrnam(_LESPHOTOS_GROUP).gr_gid
+except KeyError:
+    _LESPHOTOS_GID = None
+
 
 def _wait_until_stable(path: Path) -> bool:
     """
@@ -83,6 +105,32 @@ def _wait_until_stable(path: Path) -> bool:
         time.sleep(_STABLE_CHECK_INTERVAL_S)
     log.warning("gave up waiting for %s to stabilize", path)
     return False
+
+
+def _grant_lesphotos_group_read(path: Path) -> None:
+    """
+    chgrp's a just-moved FILE to lesphotos-service and adds group-read - see
+    this module's own docstring for why the watcher stays root specifically
+    to be able to do this to a file it doesn't own. chgrp alone is not
+    sufficient: a phone-backup app writes new files mode 700 (owner-only,
+    group slot `---`), so changing WHICH group owns the file grants that
+    group nothing on its own - confirmed the hard way fixing the existing
+    library, see docs/known-issues.md. The containing YYYY/YYYY-MM/
+    directory itself already has group-read+execute from library setup
+    (see docs/known-issues.md's chmod sweep), so no directory-level fixup
+    is needed here - this only ever runs on the single moved file.
+    Best-effort and silent beyond one warning: this is defense in depth
+    (the move itself already succeeded, and a later manual chgrp/chmod
+    sweep can always catch up), not something that should crash file
+    handling for every other photo if it fails once.
+    """
+    if _LESPHOTOS_GID is None:
+        return
+    try:
+        os.chown(path, uid=-1, gid=_LESPHOTOS_GID)
+        os.chmod(path, path.stat().st_mode | 0o040)  # g+r
+    except OSError as e:
+        log.warning("could not grant %s group read for lesphotos: %s", path, e)
 
 
 def _synoindex_rename(old_path: Path, new_path: Path) -> None:
@@ -131,6 +179,7 @@ def handle_new_file(library: config.Library, path: Path) -> None:
             return
 
         shutil.move(str(path), str(dest_path))
+        _grant_lesphotos_group_read(dest_path)
         log.info("moved %s -> %s", path, dest_path)
 
         _synoindex_rename(path, dest_path)
