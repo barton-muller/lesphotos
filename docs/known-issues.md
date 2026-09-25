@@ -31,6 +31,41 @@ returns `200`). This entry tracks what's left to finish the rollout:
       Also still needed: `.lesphotos/appdb.sqlite3` (+ `-wal`/`-shm`) and `stars.json`
       need `chmod g+w`, not just `g+r` — the database needs to be written to, not just
       read.
+
+      **Exact commands** (run over SSH as `alice@nas`, each `sudo` prompts for your own
+      password; run the two `find` sweeps in the background and let each finish before
+      starting the next — an interrupted sweep leaves the tree in a partially-migrated,
+      inconsistent state, as happened once on the `Bob` sweep):
+
+      ```sh
+      sudo nohup find /volume1/homes/Alice/Photos -exec chgrp lesphotos-service {} \; \
+        > /volume1/lesphotos/data/chgrp-alice.log 2>&1 &
+      disown
+      # wait for it: ps aux | grep "find /volume1/homes/Alice" | grep -v grep
+      # (empty output = done)
+
+      sudo nohup find /volume1/homes/Alice/Photos -type d -exec chmod g+rx {} \; \
+        > /volume1/lesphotos/data/chmod-alice-dirs.log 2>&1 &
+      disown
+      # wait for it the same way, THEN:
+
+      sudo nohup find /volume1/homes/Alice/Photos -type f -exec chmod g+r {} \; \
+        > /volume1/lesphotos/data/chmod-alice-files.log 2>&1 &
+      disown
+      # wait for it, then finally:
+
+      sudo chmod g+w /volume1/homes/Alice/Photos/.lesphotos/appdb.sqlite3 \
+        /volume1/homes/Alice/Photos/.lesphotos/appdb.sqlite3-shm \
+        /volume1/homes/Alice/Photos/.lesphotos/appdb.sqlite3-wal \
+        /volume1/homes/Alice/Photos/.lesphotos/stars.json
+      ```
+
+      **Verify** before calling it done — log in as `alice` in the lesphotos client and
+      favorite a recently-uploaded (not yet moment-organized) photo; a `200` back from
+      `POST /favorite` is the actual proof, not just the `chmod` commands completing
+      without error. Or check directly:
+      `curl -X POST http://localhost:8001/lesphotos-api/favorite -b <alice's session
+      cookie> -d '{"path": "...", "favorite": true}'`.
 - [ ] **Point the watcher at `lesphotos`.** Still runs as `root` (ad hoc, started via
       `sudo`). Needs the same account switch the API server already got. Since it's a
       separate daemon (see `server/watcher.py`'s own docstring for why), this is a
