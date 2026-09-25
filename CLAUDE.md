@@ -277,20 +277,23 @@ work, not a fresh port to hunt for each time. Reuse them:
 
 ### Restarting the server on the NAS (NAS)
 
-> **Partially stale as of 2026-09-25 — mid-migration.** The **API server** now
-> genuinely runs as the dedicated non-admin `lesphotos` service account (confirmed
-> live: `ps aux` on the NAS shows `lesphot+ ... uvicorn api:root_app`), and the
-> command below is what's actually being used. The **watcher** is not yet migrated
-> and, as of this check, isn't even running — and **Task Scheduler itself still
-> hasn't been updated** to launch either process as `lesphotos`, so none of this
-> survives a reboot yet. See `docs/known-issues.md`'s "Remaining rollout" entry for
-> the full story and what's left (`Alice/Photos` permissions, the watcher, Task
-> Scheduler) before treating this section as the final state.
+> **Watcher still pending as of 2026-09-25.** The **API server** fully runs as the
+> dedicated non-admin `lesphotos` service account, **including its own Task
+> Scheduler entry** — updated and verified live 2026-09-25 (a manual "Run" trigger
+> from the Task Scheduler UI produced a fresh `lesphot+`-owned process, clean
+> startup in `server.log`, `200` from `curl`), so this now survives a reboot. The
+> **watcher** deliberately stays `root` (see `docs/known-issues.md` for why — it
+> needs to fix permissions on phone-upload files it doesn't own), and its own Task
+> Scheduler entry hasn't been separately re-checked. See `docs/known-issues.md`'s
+> "Remaining rollout" entry for exact current status.
 
 The server is started at boot by a DSM **Task Scheduler** triggered task (Control Panel →
-Task Scheduler, event Boot-up), but Task Scheduler has no "kill this task" button — the
-UI can re-run the start script but cannot stop a process it started. So in practice,
-restarting is done entirely from an SSH session, never by logging into the DSM web UI.
+Task Scheduler, event Boot-up). Task Scheduler's own UI can both stop and re-run a task
+it manages (unlike a task launched by hand over SSH, which it has no record of) — for
+the API server specifically, **the DSM UI's own "Run" button is now the preferred way
+to restart it**, since it's the same path a real reboot takes. An SSH-based restart
+still works and is faster for rapid iteration; both end up running the exact same
+`deploy/run.sh` as `lesphotos`.
 
 **SSH as `alice@nas`** — not `bob@nas`, which has no account on the NAS and just
 hangs on password auth with no way to fail cleanly. `lesphotos` itself cannot SSH in at
@@ -302,7 +305,9 @@ this same `alice` session, not a separate login. `sudo -u` prompts for **your ow
 ```sh
 ssh alice@nas
 
-pkill -f "uvicorn api:root_app"
+# The process is lesphotos-owned now, so a plain pkill fails with "Operation not
+# permitted" even for an admin user like alice - sudo is required to kill it.
+sudo pkill -f "uvicorn api:root_app"
 
 sudo -u lesphotos UV=/usr/local/bin/uv /bin/bash /volume1/lesphotos/app/deploy/run.sh \
   >> /volume1/lesphotos/data/server.log 2>&1 &
@@ -325,11 +330,13 @@ Things that aren't obvious from `deploy/run.sh` alone:
   `Alice`'s. If a `pip`/`uv sync` dependency change ever needs re-applying, run it as
   `lesphotos`, not `Alice`, or the running server (which execs as `lesphotos`) won't see
   the update.
-- **The Task Scheduler "Run command" does not yet match the command above** — this is
-  the biggest gap in the migration. Task Scheduler's task still launches the *old*
-  `Alice`/root-based command, so a reboot right now would revert to the pre-migration
-  setup, not preserve today's `lesphotos`-based one. Updating Task Scheduler's "Run as"
-  user and command to match is tracked in `docs/known-issues.md`, not yet done.
+- **The Task Scheduler "Run command" is now `UV=/usr/local/bin/uv /bin/bash
+  /volume1/lesphotos/app/deploy/run.sh >> /volume1/lesphotos/data/server.log 2>&1`,
+  with "Run as" set to `lesphotos`** — no `sudo -u lesphotos` wrapper inside the
+  command itself, since Task Scheduler already runs the whole task as that user once
+  "Run as" is set correctly (the `sudo -u` prefix is only needed for an interactive
+  SSH session, where the shell is still `alice`'s). If this ever needs recreating,
+  match this exact command, not the old `Alice`-based one from before this migration.
 
 The repo's checkout on this NAS is at `/volume1/lesphotos/app` (the clone is named `app`,
 not `lesphotos`), with `LESPHOTOS_DATA_DIR=/volume1/lesphotos/data` as a sibling — adjust

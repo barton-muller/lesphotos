@@ -184,12 +184,11 @@ one destination folder, so a photo becomes visible without a full library rescan
 ## Making changes
 
 > **Partially stale as of 2026-09-25 — mid-migration to a `lesphotos` service
-> account.** The API server now genuinely runs as `lesphotos` (confirmed live), and
-> the commands below reflect that. The watcher is not yet migrated (and isn't
-> currently running at all), and **Task Scheduler still hasn't been updated** to
-> launch anything as `lesphotos` — a reboot right now reverts to the old
-> `Alice`/root setup. See `docs/known-issues.md`'s "Remaining rollout" entry before
-> treating this as finished.
+> account.** The API server now genuinely runs as `lesphotos`, **including via its
+> own Task Scheduler entry** (updated and verified 2026-09-25 — this now survives a
+> reboot). The watcher deliberately stays `root` (see `docs/known-issues.md` for
+> why) and its own Task Scheduler entry hasn't been separately re-checked. See
+> `docs/known-issues.md`'s "Remaining rollout" entry for exact current status.
 
 Edit, commit, and push on the Mac as usual. Then, over SSH as `alice@nas` (see
 CLAUDE.md's "SSH login user" note — `bob@nas` has no account):
@@ -220,11 +219,23 @@ cd /volume1/lesphotos/app
 # .venv (not shared with alice), so this must also run as lesphotos:
 sudo -u lesphotos UV=/usr/local/bin/uv /usr/local/bin/uv sync
 
-pkill -f "uvicorn api:root_app"
-sudo -u lesphotos UV=/usr/local/bin/uv /bin/bash deploy/run.sh \
-  >> /volume1/lesphotos/data/server.log 2>&1 &
-sleep 2 && curl -I http://localhost:8001    # confirm it came back up
+# The process is now lesphotos-owned, so killing it needs sudo even as an
+# admin user like alice (a plain pkill fails with "Operation not permitted").
+sudo pkill -f "uvicorn api:root_app"
 ```
+
+**Then restart it either way** — both are equivalent and pick up the same code, since
+both ultimately run `deploy/run.sh` as `lesphotos`:
+
+- **Via DSM**: Control Panel → Task Scheduler → the API server task → **Run**. This
+  is the same path a reboot takes, so it's the better one to use when checking that
+  a change will actually survive a restart, not just that it works when hand-run.
+- **Via SSH**, for faster iteration without touching the DSM UI:
+  ```sh
+  sudo -u lesphotos UV=/usr/local/bin/uv /bin/bash deploy/run.sh \
+    >> /volume1/lesphotos/data/server.log 2>&1 &
+  sleep 2 && curl -I http://localhost:8001    # confirm it came back up
+  ```
 
 The restart here is the same as CLAUDE.md's "Restarting the server" section - see
 that doc if this drifts from what actually works. **Task Scheduler's own task still

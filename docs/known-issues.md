@@ -82,18 +82,24 @@ returns `200`). This entry tracks what's left to finish the rollout:
       load-bearing: the move itself already succeeded even if this fails, and a
       later manual `chgrp`/`chmod` sweep (like the one used to fix the existing
       library) can always catch up.
-- [ ] **Task Scheduler entries.** Everything done so far was via manual `sudo -u
-      lesphotos <command>` (API server) or plain `sudo` (watcher, staying `root` per
-      above) over SSH — nothing survives a reboot yet. DSM Task Scheduler's own
-      "Run as" user dropdown does list `lesphotos` (confirmed), so the API server
-      task's "Run as" needs changing from `alice` to `lesphotos`; the watcher task's
-      "Run as" stays as whatever currently gives it root (`sudo`, or already running
-      as an account with sufficient privilege — check what it's actually configured
-      as before assuming). See `deploy/README.md`'s restart section for the exact
-      commands each task should run.
-- [ ] Update `deploy/README.md` once Task Scheduler is updated, so the documented
-      restart procedure matches reality (it currently still describes restarting as
-      `alice`/root via plain `sudo`, not `sudo -u lesphotos`).
+- [x] **API server's Task Scheduler entry updated and verified, 2026-09-25.** "Run
+      as" changed from `alice` to `lesphotos`; the "Run command" itself changed from
+      `UV=/var/services/homes/Alice/.local/bin/uv /bin/bash
+      /volume1/lesphotos/app/deploy/run.sh >> /volume1/lesphotos/data/server.log
+      2>&1` to just swapping the `UV=` path — `UV=/usr/local/bin/uv /bin/bash
+      /volume1/lesphotos/app/deploy/run.sh >> /volume1/lesphotos/data/server.log
+      2>&1` — since Task Scheduler already runs the whole task as `lesphotos` now
+      (no `sudo -u lesphotos` wrapper needed inside the command itself once the
+      task's own "Run as" is set correctly), and `lesphotos` has no access to
+      `Alice`'s personal `~/.local/bin/uv`. Verified live via a manual "Run" trigger
+      from the Task Scheduler UI: new PIDs owned by `lesphot+`, clean
+      startup/shutdown in `server.log`, `curl` against `:8001` returned `200`.
+      **Still open**: the watcher's own Task Scheduler entry hasn't been checked/
+      confirmed to already run with root privilege the same way (it was being
+      started ad hoc via `sudo` over SSH, not necessarily via its own scheduled
+      task) — verify that separately before assuming it survives a reboot too.
+- [x] `deploy/README.md`'s restart section updated 2026-09-25 to match the verified
+      Task Scheduler command above (see that file's "Making changes" section).
 
 **Deliberately out of scope**: `Alice` (and any other DSM admin) retains implicit
 access to every file on the NAS regardless of any of the above — inherent to the DSM
