@@ -183,12 +183,13 @@ one destination folder, so a photo becomes visible without a full library rescan
 
 ## Making changes
 
-> **Stale as of 2026-09-24 — mid-migration to a `lesphotos` service account.** The
-> commands below still build/run everything as `Alice` (and the watcher separately
-> as `root`). Both are moving to a dedicated non-admin `lesphotos` account for real
-> per-user file isolation — see `docs/known-issues.md`'s "Remaining rollout" entry
-> for the current status and exact commands actually in use right now, which may be
-> ahead of what's written here.
+> **Partially stale as of 2026-09-25 — mid-migration to a `lesphotos` service
+> account.** The API server now genuinely runs as `lesphotos` (confirmed live), and
+> the commands below reflect that. The watcher is not yet migrated (and isn't
+> currently running at all), and **Task Scheduler still hasn't been updated** to
+> launch anything as `lesphotos` — a reboot right now reverts to the old
+> `Alice`/root setup. See `docs/known-issues.md`'s "Remaining rollout" entry before
+> treating this as finished.
 
 Edit, commit, and push on the Mac as usual. Then, over SSH as `alice@nas` (see
 CLAUDE.md's "SSH login user" note — `bob@nas` has no account):
@@ -198,27 +199,37 @@ cd /volume1/lesphotos/app
 git pull
 
 # The client is built ON THE NAS, not on the Mac + rsync - confirmed working
-# directly (2026-09-24). node/npm exist at /usr/local/bin but are NOT on a
-# non-interactive SSH shell's default PATH (only /usr/bin:/bin:/usr/sbin:/sbin) -
-# an interactive `ssh alice@nas` shell finds them fine via DSM's own profile
-# setup, but `ssh host 'npm ...'` needs the PATH set explicitly or it fails
-# with "npm: command not found" despite npm genuinely being installed.
+# directly. node/npm exist at /usr/local/bin but are NOT on a non-interactive SSH
+# shell's default PATH (only /usr/bin:/bin:/usr/sbin:/sbin) - an interactive
+# `ssh alice@nas` shell finds them fine via DSM's own profile setup, but
+# `ssh host 'npm ...'` needs the PATH set explicitly or it fails with
+# "npm: command not found" despite npm genuinely being installed.
 export PATH=/usr/local/bin:$PATH
-cd client/web && npm install && npm run build
+cd client/web
+
+# MUST run as lesphotos, not alice - node_modules/dist created by a different
+# user blocks lesphotos from executing/writing into them (confirmed: a
+# Alice-owned node_modules failed with EACCES on tsc; rebuilding it as
+# lesphotos fixed it). If node_modules or dist/ still belong to alice from an
+# older build, `sudo rm -rf node_modules dist` once first.
+sudo -u lesphotos npm install
+sudo -u lesphotos npm run build
 cd /volume1/lesphotos/app
 
-# Only if server-side dependencies changed:
-UV=/var/services/homes/Alice/.local/bin/uv $UV sync
+# Only if server-side dependencies changed - lesphotos has its OWN independent
+# .venv (not shared with alice), so this must also run as lesphotos:
+sudo -u lesphotos UV=/usr/local/bin/uv /usr/local/bin/uv sync
 
 pkill -f "uvicorn api:root_app"
-UV=/var/services/homes/Alice/.local/bin/uv /bin/bash deploy/run.sh \
+sudo -u lesphotos UV=/usr/local/bin/uv /bin/bash deploy/run.sh \
   >> /volume1/lesphotos/data/server.log 2>&1 &
 sleep 2 && curl -I http://localhost:8001    # confirm it came back up
 ```
 
 The restart here is the same as CLAUDE.md's "Restarting the server" section - see
-that doc if this drifts from what actually works, since the exact command matters
-(Task Scheduler needs to match it too, for the same reason).
+that doc if this drifts from what actually works. **Task Scheduler's own task still
+needs updating to match** (both the "Run as" user and the command) before any of
+this survives a reboot - not yet done, tracked in `docs/known-issues.md`.
 
 **If a schema change is part of the update** (a new/changed column in
 `server/appdb/`), nothing extra is needed to migrate — `db.connect()` runs its

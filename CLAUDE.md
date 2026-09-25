@@ -224,19 +224,32 @@ handling than it would on any dev machine's SSD — see `docs/decisions/thumb-sh
 ### Starting the app locally
 
 The app **cannot start without `LESPHOTOS_SECRET`**, and **cannot be logged into until a
-user exists** — both deliberate (see `docs/decisions/per-user-libraries.md`). If
-`manage.py list-users` prints nothing, the answer is to create a user, not to work around
-the login.
+user exists** — both deliberate (see `docs/decisions/per-user-libraries.md`). Always
+check who already exists before assuming you need to create anyone:
 
 ```sh
 cd server
 export LESPHOTOS_DATA_DIR="$PWD/data"          # where auth.sqlite3 lives
 ../.venv/bin/python manage.py list-users        # who already exists
+```
 
-# if empty, create one. The library root is the USER's folder, not the
-# parent: data/photos/bob, never data/photos.
-../.venv/bin/python manage.py add-user <name> "$PWD/data/photos/bob"
+On this Mac that currently prints one real user, `bob`, pointed at a real photo
+library outside the repo (`/Users/bob/Downloads/lesphotos-organized`, ~26,500
+photos) — **not** `server/data/photos/<name>`, which was an earlier, now-stale
+fakelib/test convention. Don't assume the library root from an old example; always
+read it from `list-users`'s own output.
 
+If `list-users` prints nothing (a genuinely fresh checkout/data dir), create a user
+pointed at wherever your real or test photos actually live — the library root is the
+**user's own folder**, never a shared parent multiple users' photos sit under:
+
+```sh
+../.venv/bin/python manage.py add-user <name> "<path to that user's own photo folder>"
+```
+
+Then start the server:
+
+```sh
 cd .. && UV=$(command -v uv) ./deploy/run.sh    # reads deploy/lesphotos.env
 ```
 
@@ -264,13 +277,15 @@ work, not a fresh port to hunt for each time. Reuse them:
 
 ### Restarting the server on the NAS (NAS)
 
-> **Stale as of 2026-09-24 — mid-migration.** The server (and soon the watcher) is
-> moving from running as `Alice` to a dedicated non-admin `lesphotos` service account,
-> for real file-permission isolation between family members' libraries (see
-> `docs/known-issues.md`'s "Remaining rollout" entry for the full story and what's
-> left). The commands below still describe the *old* `Alice`-based restart and will
-> stop being accurate once Task Scheduler is updated to run as `lesphotos` — check
-> `docs/known-issues.md` first if this section and reality disagree.
+> **Partially stale as of 2026-09-25 — mid-migration.** The **API server** now
+> genuinely runs as the dedicated non-admin `lesphotos` service account (confirmed
+> live: `ps aux` on the NAS shows `lesphot+ ... uvicorn api:root_app`), and the
+> command below is what's actually being used. The **watcher** is not yet migrated
+> and, as of this check, isn't even running — and **Task Scheduler itself still
+> hasn't been updated** to launch either process as `lesphotos`, so none of this
+> survives a reboot yet. See `docs/known-issues.md`'s "Remaining rollout" entry for
+> the full story and what's left (`Alice/Photos` permissions, the watcher, Task
+> Scheduler) before treating this section as the final state.
 
 The server is started at boot by a DSM **Task Scheduler** triggered task (Control Panel →
 Task Scheduler, event Boot-up), but Task Scheduler has no "kill this task" button — the
@@ -278,35 +293,43 @@ UI can re-run the start script but cannot stop a process it started. So in pract
 restarting is done entirely from an SSH session, never by logging into the DSM web UI.
 
 **SSH as `alice@nas`** — not `bob@nas`, which has no account on the NAS and just
-hangs on password auth with no way to fail cleanly. (`lesphotos` itself cannot SSH in at
+hangs on password auth with no way to fail cleanly. `lesphotos` itself cannot SSH in at
 all — DSM restricts SSH login to the `administrators` group with no per-user override —
 so commands meant to run *as* `lesphotos` go through `sudo -u lesphotos <command>` from
-this same `alice` session, not a separate login.)
+this same `alice` session, not a separate login. `sudo -u` prompts for **your own**
+(`alice`'s) sudo password, not a password for `lesphotos`.
 
 ```sh
 ssh alice@nas
 
 pkill -f "uvicorn api:root_app"
 
-UV=/var/services/homes/Alice/.local/bin/uv /bin/bash /volume1/lesphotos/app/deploy/run.sh \
+sudo -u lesphotos UV=/usr/local/bin/uv /bin/bash /volume1/lesphotos/app/deploy/run.sh \
   >> /volume1/lesphotos/data/server.log 2>&1 &
 
 sleep 2 && curl -I http://localhost:8001    # confirm it came back up
 ```
 
-Two things that aren't obvious from `deploy/run.sh` alone:
+Things that aren't obvious from `deploy/run.sh` alone:
 
 - **`run.sh` looks for `uv` at `$HOME/.local/bin/uv`, but DSM Task Scheduler runs with no
   `$HOME` set** (it's not a login shell) — the lookup silently becomes `/.local/bin/uv`
-  and fails with "uv not found." The fix is passing `UV=<absolute path to uv>` explicitly,
-  which is why it's in the command above rather than relying on `run.sh`'s own default.
-  Find the real path once with `which uv` over SSH (it's `/var/services/homes/<user>/...`,
-  not `/volume1/homes/<user>/...` — DSM's actual home path differs from the share path).
-- **The Task Scheduler "Run command" must match this exact command** (with `/bin/bash`
-  in front — Synology's own recommendation for scheduler scripts — and the same `UV=`
-  prefix), or the boot-time start will fail the same way. If the paths above ever change
-  (repo moved, different NAS user), update the Task Scheduler entry to match, not just
-  this doc.
+  and fails with "uv not found." The fix is passing `UV=<absolute path to uv>` explicitly.
+  For `lesphotos` specifically, that path is **`/usr/local/bin/uv`** — a shared,
+  world-executable copy (`755`), not any one person's `~/.local/bin/uv`. `lesphotos` has
+  no access to `Alice`'s personal home directory at all (by design — see
+  `docs/known-issues.md`), so the old `Alice`-owned `uv` binary won't work for this
+  account even though it's the same binary underneath.
+- `lesphotos` also has its **own independent `.venv`** under `/volume1/lesphotos/app/`
+  (rebuilt with `sudo -u lesphotos uv sync` during the migration) — not sharing
+  `Alice`'s. If a `pip`/`uv sync` dependency change ever needs re-applying, run it as
+  `lesphotos`, not `Alice`, or the running server (which execs as `lesphotos`) won't see
+  the update.
+- **The Task Scheduler "Run command" does not yet match the command above** — this is
+  the biggest gap in the migration. Task Scheduler's task still launches the *old*
+  `Alice`/root-based command, so a reboot right now would revert to the pre-migration
+  setup, not preserve today's `lesphotos`-based one. Updating Task Scheduler's "Run as"
+  user and command to match is tracked in `docs/known-issues.md`, not yet done.
 
 The repo's checkout on this NAS is at `/volume1/lesphotos/app` (the clone is named `app`,
 not `lesphotos`), with `LESPHOTOS_DATA_DIR=/volume1/lesphotos/data` as a sibling — adjust
