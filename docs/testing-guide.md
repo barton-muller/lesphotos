@@ -97,6 +97,35 @@ prevention pattern, and the gesture handler itself was proven to stop stalling a
 step), but the actual "does Chrome still zoom the page" question needs a real device. Say so
 explicitly in any report that relies on touch emulation for a gesture-conflict class of bug.
 
+## Writing an ad hoc Playwright script (gotchas hit in practice)
+
+For a one-off manual check that isn't worth adding to the committed suite (see
+"Ad hoc vs. committed scripts" below):
+
+- **No `chromium-cli` is installed in most environments this runs in** — don't spend a
+  turn checking for it. Playwright itself is already a project dependency
+  (`client/web/node_modules/playwright`), with Chromium binaries already cached from
+  prior runs at `~/Library/Caches/ms-playwright/` on a Mac. Use it directly.
+- **Run the script from inside `client/web/`**, not a scratch/tmp directory —
+  `node script.mjs` needs to resolve `playwright` from `client/web/node_modules`, and
+  running from elsewhere throws `ERR_MODULE_NOT_FOUND` even though the package is
+  genuinely installed. Put a throwaway script in a scratch subfolder there (e.g.
+  `.scratch/`) and delete it when done — don't commit it.
+- **Use `chromium.launchPersistentContext(profileDir, {...})`**, not a plain
+  `chromium.launch()` + `newContext()`, when a check needs to survive across *separate*
+  script invocations — e.g. "sync once to build a watermark, then run a second script
+  to prove the second sync is cheap." A plain context's localStorage/IndexedDB don't
+  persist between Node process runs; a persistent context backed by a real profile
+  directory does.
+- **`page.waitForFunction(fn, options)` is wrong** — the real signature is
+  `waitForFunction(fn, arg, options)`. Passing an options object as the second
+  positional argument silently makes it the page function's `arg` instead, so a
+  `{timeout: 900000}` meant to extend the wait never takes effect and the call falls
+  back to Playwright's 30s default — this can look exactly like the thing you're
+  testing hanging or stalling, when it's actually your own script's timeout firing
+  early. Always pass `null` (or the real arg) as the second positional parameter,
+  options third.
+
 ## Ad hoc vs. committed scripts
 
 Same rule as `CLAUDE.md` already states for scratch scripts generally: write throwaway
