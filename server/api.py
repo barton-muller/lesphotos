@@ -44,6 +44,15 @@ from moment_dates import date_prefix_str, parse_moment_date_prefix
 
 app = FastAPI()
 
+# Repo root's VERSION file - server/api.py -> server -> repo root. Read
+# once at import time, not per-request: it only changes on a deploy, which
+# already restarts the process (see CLAUDE.md's NAS restart steps).
+_VERSION_FILE = Path(__file__).resolve().parent.parent / "VERSION"
+try:
+    APP_VERSION = _VERSION_FILE.read_text().strip()
+except FileNotFoundError:
+    APP_VERSION = "unknown"
+
 # In production the API and the built client are served by this same
 # process (see the static mount at the end of this file), so requests are
 # same-origin and no CORS headers are needed at all. This exists only for
@@ -113,7 +122,11 @@ def _resolve_host_path(library: config.Library, path: str) -> Path:
 
 @app.get("/health")
 def health():
-    return {"ok": True}
+    # `version` exists so a NAS restart can be confirmed as actually
+    # running the intended build, not just that *some* process came back
+    # up on :8001 - see docs/testing-guide.md and CLAUDE.md's restart
+    # steps, which previously only checked `curl -I` for a 200.
+    return {"ok": True, "version": APP_VERSION}
 
 
 class FavoriteRequest(BaseModel):

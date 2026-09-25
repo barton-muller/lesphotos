@@ -4,6 +4,15 @@ Bugs observed in real use, not yet root-caused or fixed. One entry per issue: wh
 observed, what was expected, and any leads. Move an entry to a commit message (and delete
 it here) once it's actually fixed — this file is a queue, not a changelog.
 
+## Android pinch on the timeline — fixed, needs a real-device check
+
+**Reported 2026-09-24**: pinching the grid on Android zoomed the page instead of changing
+tiles per row. Fixed in `usePinchZoom.ts` (touch events with a non-passive `touchmove`, plus
+`touch-action: pan-x pan-y` on the scroll element). Verified under Chromium's Pixel 7
+emulation with a CDP-synthesized pinch, but that emulation did **not** reproduce native page
+zoom even before the fix, so the original symptom is only proven gone on a real phone.
+Delete this entry once confirmed there.
+
 ## Remaining rollout: `lesphotos` service account (favoriting fix is done)
 
 **Fixed and verified 2026-09-24**: starring a photo silently failed with a 500 whenever

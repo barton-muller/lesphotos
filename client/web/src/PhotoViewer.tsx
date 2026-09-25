@@ -187,7 +187,13 @@ export function PhotoViewer({ photos, index, onClose, onNavigate }: PhotoViewerP
     setShareStatus('…')
     try {
       const result = await shareOrDownloadPhoto(photo, fullResBlob)
-      setShareStatus(result === 'shared' ? 'Shared' : result === 'saved-mirrored' ? 'Saved' : 'Downloaded')
+      // The OS share sheet is its own confirmation; only the silent download
+      // fallbacks need telling that anything happened.
+      if (result === 'shared') {
+        setShareStatus('')
+        return
+      }
+      setShareStatus(result === 'saved-mirrored' ? 'Saved' : 'Downloaded')
       setTimeout(() => setShareStatus(''), 2000)
     } catch (err) {
       setShareStatus(`Failed: ${err instanceof Error ? err.message : String(err)}`)

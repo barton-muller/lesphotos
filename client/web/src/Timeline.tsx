@@ -203,6 +203,7 @@ const Thumbnail = memo(function Thumbnail({ photo, tileSize, onOpen, selectionMo
       {url ? (
       <img
         src={url}
+        data-testid="photo-tile"
         // The moment name, not photo.id: alt text is what the browser
         // renders when the image has no source, so a raw UUID was appearing
         // in the grid whenever a blob wasn't resident yet.
@@ -247,6 +248,7 @@ const Thumbnail = memo(function Thumbnail({ photo, tileSize, onOpen, selectionMo
         // outline as the real tile, so a fast scroll stays fully interactive
         // instead of dead until its thumbnail arrives.
         <div
+          data-testid="photo-tile"
           onClick={(e) => {
             if (!selectionMode) return onOpen()
             if (e.shiftKey) return onSelectRangeTo()
@@ -714,9 +716,17 @@ export function Timeline({
   // re-trigger the read below just the same - see subscribePhotosVersion's
   // own comment in db.ts.
   const tableVersion = useSyncExternalStore(subscribePhotosVersion, getPhotosVersion)
+  // Which starredOnly the current `photos` belong to. Only a switch of view
+  // blanks the grid; a table write (a favorite toggle, a sync page) re-reads
+  // behind the grid already on screen. Blanking on every write unmounted the
+  // whole grid - scroll position included - each time a star was tapped.
+  const loadedForRef = useRef<boolean | null>(null)
   useEffect(() => {
     let cancelled = false
-    setPhotos(undefined)
+    // Marked only once a read completes, so a first load cancelled by a sync
+    // page still gets the fast first-page path on its retry.
+    const fresh = loadedForRef.current !== starredOnly
+    if (fresh) setPhotos(undefined)
     // Sorted by MOMENT date, matching /timeline's own ORDER BY, then by
     // capture time within the moment. Sorting on `date` alone here would
     // silently undo the server's ordering: a photo whose EXIF disagrees
@@ -740,7 +750,9 @@ export function Timeline({
       if (starredOnly) {
         // Small set - no need for a first-page split.
         const rows = await db.photos.where('favorite').equals(1).toArray()
-        if (!cancelled) setPhotos(rows.sort(byMomentThenDate))
+        if (cancelled) return
+        loadedForRef.current = starredOnly
+        setPhotos(rows.sort(byMomentThenDate))
         return
       }
       // Newest-`date`-first, not primary-key order: a UUID primary key
@@ -752,12 +764,22 @@ export function Timeline({
       // one index at a time - but `date` and `momentDate` are close enough
       // for recent content that this alone gets today's photos into the
       // first page, which is the actual goal.
-      const firstPage = await db.photos.orderBy('date').reverse().limit(FIRST_PAGE_SIZE).toArray()
-      if (cancelled) return
-      setPhotos([...firstPage].sort(byMomentThenDate))
-      const rest = await db.photos.orderBy('date').reverse().offset(FIRST_PAGE_SIZE).toArray()
-      if (cancelled) return
-      const all = [...firstPage, ...rest]
+      //
+      // A re-read behind an already-populated grid skips phase 1: committing
+      // just the first page would visibly truncate the library until phase 2.
+      let all: PhotoMeta[]
+      if (fresh) {
+        const firstPage = await db.photos.orderBy('date').reverse().limit(FIRST_PAGE_SIZE).toArray()
+        if (cancelled) return
+        setPhotos([...firstPage].sort(byMomentThenDate))
+        const rest = await db.photos.orderBy('date').reverse().offset(FIRST_PAGE_SIZE).toArray()
+        if (cancelled) return
+        all = [...firstPage, ...rest]
+      } else {
+        all = await db.photos.toArray()
+        if (cancelled) return
+      }
+      loadedForRef.current = starredOnly
       setPhotos(all.sort(byMomentThenDate))
       // Now that the whole library is in memory, find the real oldest
       // momentDate and persist its year for next load - see
@@ -1385,6 +1407,9 @@ export function Timeline({
           position: 'absolute',
           inset: 0,
           overflow: 'auto',
+          // Declines the browser's own pinch-zoom here so usePinchZoom gets the
+          // gesture; one-finger scrolling in either axis is unaffected.
+          touchAction: 'pan-x pan-y',
           // On a phone the rail is a collapsed handle that overlays the grid
           // while dragging, so only the handle's own width is reserved -
           // reserving the full 148px would give back the space the drawer
