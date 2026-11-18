@@ -46,3 +46,11 @@ client/web/tests/.data/
 client/web/test-results/
 client/web/playwright-report/
 client/web/blob-report/
+
+# Local account DB (usernames, scrypt hashes, library paths) - person-specific,
+# created by `manage.py add-user`. Never committed.
+server/data/auth.sqlite3*
+
+# Personal place overrides (real coordinates). Copy
+# tools/custom_locations.example.json to tools/custom_locations.json and edit.
+tools/custom_locations.json

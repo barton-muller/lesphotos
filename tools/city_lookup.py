@@ -40,9 +40,10 @@ GEONAMES_URL = "https://download.geonames.org/export/dump/cities15000.zip"
 # Rotterdam is both bigger and within the search radius), and a private
 # place (a cottage, a specific house) was never going to be in GeoNames
 # at all. Checked BEFORE the population lookup, so an entry here always
-# wins within its radius regardless of what's nearby. Not committed with
-# real coordinates filled in - see custom_locations.json's own template
-# entries, which need editing to the user's actual coordinates.
+# wins within its radius regardless of what's nearby. The real file is
+# gitignored (it holds personal coordinates); copy
+# custom_locations.example.json to custom_locations.json and edit. A missing
+# file just means no overrides.
 CUSTOM_LOCATIONS_PATH = Path(__file__).resolve().parent / "custom_locations.json"
 
 # How far to look for a bigger nearby city before giving up and returning

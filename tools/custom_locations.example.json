@@ -1,0 +1,14 @@
+[
+  {
+    "name": "springfield-united-states",
+    "lat": 39.7817,
+    "lon": -89.6501,
+    "radius_km": 5
+  },
+  {
+    "name": "example-cottage",
+    "lat": 51.5007,
+    "lon": -0.1246,
+    "radius_km": 10
+  }
+]

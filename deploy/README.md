@@ -87,7 +87,7 @@ account** — see *Why no admin* below.
 cd /volume1/lesphotos/server
 export LESPHOTOS_DATA_DIR=/volume1/lesphotos-data
 ../.venv/bin/python manage.py add-user alice /volume1/homes/alice/Photos
-../.venv/bin/python manage.py add-user bob   /volume1/homes/bob/Photos
+../.venv/bin/python manage.py add-user carol /volume1/homes/carol/Photos
 ../.venv/bin/python manage.py list-users
 ```
 
