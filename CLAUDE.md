@@ -275,7 +275,7 @@ work, not a fresh port to hunt for each time. Reuse them:
   current) — pick an obvious throwaway port for that, and stop it before finishing up
   rather than leaving it bound.
 
-### Restarting the server on the NAS (NAS)
+### Restarting the server on the NAS
 
 > **Watcher still pending as of 2026-09-25.** The **API server** fully runs as the
 > dedicated non-admin `lesphotos` service account, **including its own Task

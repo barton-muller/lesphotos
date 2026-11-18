@@ -10,7 +10,7 @@ safety measures that fell out of the answer.
 Thumbnails scale with **file count, not bytes**, and that distinction dominates the answer.
 A 25MB video and a 3MB photo each cost exactly one ~20KB thumbnail.
 
-Measured on the real library (`/Volumes/home/Photos`, i.e. NAS = the DS124):
+Measured on the real library (`/Volumes/home/Photos`, i.e. the DS124 NAS):
 
 | | value | source |
 |---|---|---|

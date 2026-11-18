@@ -135,7 +135,7 @@ def main():
     root_group.add_argument("--user", help="benchmark this account's library instead of --root")
     ap.add_argument(
         "--tag", required=True,
-        help="machine/library identity, e.g. bob-laptop-26k, nas-nas, "
+        help="machine/library identity, e.g. bob-laptop-26k, nas-ds124, "
              "container-fake-1k. Only runs sharing a --tag are comparable.",
     )
     ap.add_argument(

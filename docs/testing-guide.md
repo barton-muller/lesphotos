@@ -237,7 +237,7 @@ Results append to `benchmarks/results.jsonl` (git-tracked - the log's own commit
 the record). **`--tag` identifies the machine and library, and only same-tag runs are ever
 comparable** - a laptop and the DS124 NAS are different hardware entirely, and a fake
 1,000-photo library and the real 26,000-photo one are different problems. Suggested tags:
-`bob-laptop-26k` for the primary real-library benchmark, `nas-nas` for the actual
+`bob-laptop-26k` for the primary real-library benchmark, `nas-ds124` for the actual
 production target, `container-fake-<n>` for a cloud session's fakelib run (useful for
 catching a *directional* regression - "this commit made scanning 3x slower" is true
 regardless of absolute hardware - but never cite a container number as representative of

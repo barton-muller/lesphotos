@@ -296,7 +296,7 @@ same fix: `chmod g+r` on the source folder).
 ## Restarting / stopping
 
 Task Scheduler starts the server at boot but has no stop button, so both restart and
-manual stop are done over SSH — see "Restarting the server on the NAS (NAS)" in
+manual stop are done over SSH — see "Restarting the server on the NAS" in
 CLAUDE.md for the exact commands. In short:
 
 ```sh

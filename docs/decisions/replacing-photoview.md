@@ -58,7 +58,7 @@ because `scanAll` is admin-only while `favoriteMedia` is user-scoped.
 Synthetic dev library (`server/data/photos/`): 2,321 JPEGs, 8.5GB, zero video.
 `media-cache/` = 201MB, i.e. **~2.4% of originals**.
 
-Real library (`/Volumes/home/Photos`, SMB mount of `NAS` - **`NAS` is the DS124 itself**,
+Real library (`/Volumes/home/Photos`, SMB mount of the NAS - **the NAS is the DS124 itself**,
 i.e. these are the target machine's real contents, not a proxy): 4,443 files, 21.9GB.
 
 | ext | count |
@@ -124,7 +124,7 @@ In scope, deliberately minimal:
   instead of `<img>`.
 - **No transcoding.** Explicitly deferred - see below.
 
-ffmpeg 4.1.9 confirmed present on `NAS` = the DS124 (`/bin/ffmpeg`); HEVC decode is
+ffmpeg 4.1.9 confirmed present on the NAS (the DS124) (`/bin/ffmpeg`); HEVC decode is
 supported in 4.1.x, so frame extraction runs on-device. No off-box indexing step is needed.
 
 ### HEIC
@@ -188,7 +188,7 @@ wait minutes.
 
 ## Open questions
 
-None blocking. ffmpeg availability on the target was the last one and is resolved: `NAS` is
+None blocking. ffmpeg availability on the target was the last one and is resolved: the NAS is
 the DS124 and has ffmpeg 4.1.9, so the indexer runs on-box.
 
 ## Status
