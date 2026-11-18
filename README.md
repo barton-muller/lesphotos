@@ -1,10 +1,88 @@
-# lesphotos
+<p align="center">
+  <img src="docs/images/hero.jpg" alt="lesphotos: your family's photos on your own server, shown on a phone and a laptop" width="100%">
+</p>
 
-A self-hosted photo library for a family, built so the **filesystem is the source of truth**.
-Moments are folders. Everything else — the database, the thumbnails, the app itself — is a
-disposable cache that can be deleted and rebuilt from those folders.
+<h1 align="center">lesphotos</h1>
 
-Runs on a Synology DS124: 1GB RAM, ARM. That constraint drives most of the design.
+<p align="center">
+  <b>Your family's photos, on your own hardware.</b><br>
+  A fast, offline-first photo library that lives in plain folders and runs on a 1&nbsp;GB NAS.
+</p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue"></a>
+  <img alt="Runs on a 1 GB Synology DS124" src="https://img.shields.io/badge/runs%20on-1%20GB%20NAS-orange">
+  <img alt="Installable PWA" src="https://img.shields.io/badge/app-installable%20PWA-5a0fc8">
+  <img alt="Self-hosted" src="https://img.shields.io/badge/cloud-none-lightgrey">
+</p>
+
+---
+
+## Why you'll like it
+
+**⚡ Instant.** Sync once and scrolling makes *zero* network requests. Thumbnails live on your
+device, so 26,000 photos scroll as smoothly as 200.
+
+**📴 Works offline.** An installable web app: add it to your phone's home screen and browse the
+whole library on a plane.
+
+**📁 Folders, not a database.** Every moment is a folder named `2026-03-15-Skiing`. Rename or
+merge moments in the app and the folders on disk follow. In twenty years your photos are still
+sorted, with or without this software.
+
+**🪶 Tiny.** One ~50&nbsp;MB process. It was built for a Synology DS124 (1&nbsp;GB RAM, ARM, a
+spinning hard disk), so it flies on anything bigger.
+
+**🔒 Private by construction.** No cloud, no admin account, no tracking. Each person has their own
+library, and the server has no way to *name* anyone else's. Your originals are never modified.
+
+**📱 Made for phone photos.** iPhone HEIC, Live and Motion Photos, HEVC video, favourites,
+pinch-to-zoom, a year scrubber, and bulk download.
+
+<table>
+  <tr>
+    <td width="26%"><img src="docs/images/phone-timeline.jpg" alt="Phone timeline grouped into moments"></td>
+    <td width="74%"><img src="docs/images/desktop-timeline.jpg" alt="Desktop timeline with the year scrubber"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Moments, on your phone</sub></td>
+    <td align="center"><sub>The same library on a laptop, with the year scrubber</sub></td>
+  </tr>
+</table>
+
+<sub>Screenshots use generated demo images.</sub>
+
+### By the numbers
+
+| | |
+|---|---|
+| Memory, idle | **~50 MB**, one process, no container |
+| Scrolling 60 screens | **0 network requests** |
+| One thumbnail | **1.4 ms**, ~20 KB |
+| Rename a moment | **~65 ms** |
+| Re-index when nothing changed | **0.08 s** for 2,332 files |
+| Disk overhead | **~5%** of your originals for thumbnails and previews |
+
+### Quick start
+
+```bash
+uv sync
+export LESPHOTOS_DATA_DIR=./server/data
+uv run python server/manage.py add-user alice /path/to/alice/Photos
+uv run python server/indexer.py --user alice
+LESPHOTOS_SECRET=$(python3 -c 'import secrets;print(secrets.token_hex(32))') \
+  uv run uvicorn api:root_app --port 8001 --app-dir server
+```
+
+Then build the client (`cd client/web && npm install && npm run build`) and open
+`http://localhost:8001`. Full details, including Synology deployment, are below and in
+[deploy/README.md](deploy/README.md).
+
+---
+
+# Under the hood
+
+The rest of this page is for people who want to know how it works, run it, or hack on it.
 
 ## How it works
 
