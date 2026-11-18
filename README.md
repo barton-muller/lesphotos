@@ -1,12 +1,11 @@
 <p align="center">
-  <img src="docs/images/hero.jpg" alt="lesphotos: a photo library that's just folders, shown on a phone and a laptop" width="100%">
+  <img src="docs/images/hero.jpg" alt="lesphotos: a lightweight, folder-based photo library with offline thumbnail scrolling, shown on a phone and a laptop" width="100%">
 </p>
 
 <h1 align="center">lesphotos</h1>
 
 <p align="center">
-  <b>A photo library that's just folders.</b><br>
-  Low footprint, offline thumbnails, no database to migrate.
+  <b>A lightweight, folder-based photo library with offline thumbnail scrolling.</b>
 </p>
 
 <p align="center">
@@ -38,27 +37,9 @@ library and there is no shared timeline or admin account.
 
 ## How it's set up
 
-```mermaid
-flowchart TB
-    subgraph client["Client: phone or laptop"]
-        direction LR
-        PWA["React PWA<br/>virtualized timeline"]
-        IDB[("IndexedDB<br/>thumbnails, offline")]
-        PWA --- IDB
-    end
-
-    subgraph server["Server: a NAS or any Linux box"]
-        direction LR
-        FS[("Photo folders<br/>2026/2026-03-15-Skiing/<br/>originals, never modified")]
-        IDX["indexer<br/>runs on demand, then exits"]
-        CACHE[(".lesphotos/<br/>thumbnails + SQLite<br/>rebuildable cache")]
-        API["uvicorn + FastAPI<br/>the only always-on process, ~50 MB"]
-        FS --> IDX --> CACHE --> API
-        FS -.-> API
-    end
-
-    client <-->|"HTTP: metadata and thumbnails once, previews when you open a photo"| server
-```
+<p align="center">
+  <img src="docs/images/setup.svg" alt="A phone or laptop syncs thumbnails from a server that reads plain photo folders" width="100%">
+</p>
 
 <table>
   <tr>
