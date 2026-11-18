@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue"></a>
-  <img alt="Runs on a 1 GB Synology DS124" src="https://img.shields.io/badge/runs%20on-1%20GB%20NAS-orange">
+  <img alt="About 50 MB of memory" src="https://img.shields.io/badge/memory-~50%20MB-orange">
   <img alt="Installable PWA" src="https://img.shields.io/badge/app-installable%20PWA-5a0fc8">
 </p>
 
@@ -18,9 +18,9 @@
 
 ## What it is
 
-**Low footprint.** One ~50&nbsp;MB server process, built for a Synology DS124 (1&nbsp;GB RAM, ARM,
-a spinning hard disk). Indexing, HEIC decoding and ffmpeg run as short-lived subprocesses that
-exit, so nothing heavy stays resident.
+**Low footprint.** One ~50&nbsp;MB server process. Indexing, HEIC decoding and ffmpeg run as
+short-lived subprocesses that exit, so nothing heavy stays resident and it idles on almost any
+hardware.
 
 **Offline thumbnails.** Sync once, download the thumbnails (Profile, then *Download all*), and the
 whole timeline lives in your browser's IndexedDB. Scrolling makes zero network requests and works
