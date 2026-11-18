@@ -49,7 +49,7 @@ library and there is no shared timeline or admin account.
   </tr>
 </table>
 
-<sub>Screenshots show a small demo library.</sub>
+<sub>Screenshots show a demo library of the author's photos plus Unsplash and Wikimedia Commons images; see [credits](docs/images/CREDITS.md).</sub>
 
 ### By the numbers
 
