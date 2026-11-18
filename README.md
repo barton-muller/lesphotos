@@ -1,56 +1,74 @@
 <p align="center">
-  <img src="docs/images/hero.jpg" alt="lesphotos: your family's photos on your own server, shown on a phone and a laptop" width="100%">
+  <img src="docs/images/hero.jpg" alt="lesphotos: a photo library that's just folders, shown on a phone and a laptop" width="100%">
 </p>
 
 <h1 align="center">lesphotos</h1>
 
 <p align="center">
-  <b>Your family's photos, on your own hardware.</b><br>
-  A fast, offline-first photo library that lives in plain folders and runs on a 1&nbsp;GB NAS.
+  <b>A photo library that's just folders.</b><br>
+  Low footprint, offline thumbnails, no database to migrate.
 </p>
 
 <p align="center">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue"></a>
   <img alt="Runs on a 1 GB Synology DS124" src="https://img.shields.io/badge/runs%20on-1%20GB%20NAS-orange">
   <img alt="Installable PWA" src="https://img.shields.io/badge/app-installable%20PWA-5a0fc8">
-  <img alt="Self-hosted" src="https://img.shields.io/badge/cloud-none-lightgrey">
 </p>
 
 ---
 
-## Why you'll like it
+## What it is
 
-**⚡ Instant.** Sync once and scrolling makes *zero* network requests. Thumbnails live on your
-device, so 26,000 photos scroll as smoothly as 200.
+**Low footprint.** One ~50&nbsp;MB server process, built for a Synology DS124 (1&nbsp;GB RAM, ARM,
+a spinning hard disk). Indexing, HEIC decoding and ffmpeg run as short-lived subprocesses that
+exit, so nothing heavy stays resident.
 
-**📴 Works offline.** An installable web app: add it to your phone's home screen and browse the
-whole library on a plane.
+**Offline thumbnails.** Sync once, download the thumbnails (Profile, then *Download all*), and the
+whole timeline lives in your browser's IndexedDB. Scrolling makes zero network requests and works
+with no connection. Previews and originals are fetched only when you open a photo.
 
-**📁 Folders, not a database.** Every moment is a folder named `2026-03-15-Skiing`. Rename or
-merge moments in the app and the folders on disk follow. In twenty years your photos are still
-sorted, with or without this software.
+**File-system based.** A moment is a folder named `2026-03-15-Skiing`. The database and thumbnails
+are a rebuildable cache stored inside the library (`.lesphotos/`), originals are never modified,
+and renaming a moment in the app renames the folder on disk.
 
-**🪶 Tiny.** One ~50&nbsp;MB process. It was built for a Synology DS124 (1&nbsp;GB RAM, ARM, a
-spinning hard disk), so it flies on anything bigger.
+**Good to know.** lesphotos does not receive uploads from phones. Get photos into your folders
+however you already do (Synology's mobile apps, SMB, rsync, anything that writes files) and it
+indexes what lands there; an optional watcher does that automatically. Each user has their own
+library and there is no shared timeline or admin account.
 
-**🔒 Private by construction.** No cloud, no admin account, no tracking. Each person has their own
-library, and the server has no way to *name* anyone else's. Your originals are never modified.
+## How it's set up
 
-**📱 Made for phone photos.** iPhone HEIC, Live and Motion Photos, HEVC video, favourites,
-pinch-to-zoom, a year scrubber, and bulk download.
+```mermaid
+flowchart TB
+    subgraph client["Client: phone or laptop"]
+        direction LR
+        PWA["React PWA<br/>virtualized timeline"]
+        IDB[("IndexedDB<br/>thumbnails, offline")]
+        PWA --- IDB
+    end
+
+    subgraph server["Server: a NAS or any Linux box"]
+        direction LR
+        FS[("Photo folders<br/>2026/2026-03-15-Skiing/<br/>originals, never modified")]
+        IDX["indexer<br/>runs on demand, then exits"]
+        CACHE[(".lesphotos/<br/>thumbnails + SQLite<br/>rebuildable cache")]
+        API["uvicorn + FastAPI<br/>the only always-on process, ~50 MB"]
+        FS --> IDX --> CACHE --> API
+        FS -.-> API
+    end
+
+    client <-->|"HTTP: metadata and thumbnails once, previews when you open a photo"| server
+```
 
 <table>
   <tr>
-    <td width="26%"><img src="docs/images/phone-timeline.jpg" alt="Phone timeline grouped into moments"></td>
-    <td width="74%"><img src="docs/images/desktop-timeline.jpg" alt="Desktop timeline with the year scrubber"></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>Moments, on your phone</sub></td>
-    <td align="center"><sub>The same library on a laptop, with the year scrubber</sub></td>
+    <td width="20%"><img src="docs/images/phone-timeline.jpg" alt="Phone timeline grouped into moments"></td>
+    <td width="20%"><img src="docs/images/phone-viewer.jpg" alt="Phone photo viewer"></td>
+    <td width="60%"><img src="docs/images/desktop-timeline.jpg" alt="Desktop timeline with the year scrubber"></td>
   </tr>
 </table>
 
-<sub>Screenshots use generated demo images.</sub>
+<sub>Screenshots use demo photos from Unsplash.</sub>
 
 ### By the numbers
 
