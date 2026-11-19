@@ -1,5 +1,11 @@
 import { useEffect, useState } from 'react'
-import { loadThumbnailUrl, peekThumbnailUrl, releaseThumbnail, retainThumbnail } from './thumbnails'
+import {
+  loadThumbnailUrl,
+  peekThumbnailUrl,
+  releaseThumbnail,
+  retainThumbnail,
+  subscribeThumbnailInvalidated,
+} from './thumbnails'
 
 /**
  * The thumbnail URL for one photo, or null while it loads.
@@ -15,6 +21,9 @@ import { loadThumbnailUrl, peekThumbnailUrl, releaseThumbnail, retainThumbnail }
  */
 export function useThumbnail(id: string): string | null {
   const [, setLoaded] = useState(0)
+  // Bumped only when this photo's blob is rewritten (never by our own reads), so
+  // it can safely be an effect dependency without risking a read/render loop.
+  const [epoch, setEpoch] = useState(0)
   const resident = peekThumbnailUrl(id)
 
   // Retain for as long as this tile is showing THIS photo, keyed on id
@@ -25,6 +34,8 @@ export function useThumbnail(id: string): string | null {
     retainThumbnail(id)
     return () => releaseThumbnail(id)
   }, [id])
+
+  useEffect(() => subscribeThumbnailInvalidated(id, () => setEpoch((n) => n + 1)), [id])
 
   useEffect(() => {
     if (resident) return
@@ -46,7 +57,7 @@ export function useThumbnail(id: string): string | null {
     return () => {
       cancelled = true
     }
-  }, [id, resident])
+  }, [id, resident, epoch])
 
   return resident
 }

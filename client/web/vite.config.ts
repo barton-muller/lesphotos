@@ -4,6 +4,8 @@ import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
 export default defineConfig({
+  // The browser demo is published from docs/ at <user>.github.io/lesphotos/.
+  base: process.env.VITE_DEMO ? '/lesphotos/' : '/',
   plugins: [
     react(),
     VitePWA({

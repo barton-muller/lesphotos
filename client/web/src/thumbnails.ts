@@ -360,6 +360,26 @@ export function invalidateThumbnail(id: string) {
     entries.delete(id)
   }
   missing.delete(id)
+  const waiting = invalidationListeners.get(id)
+  if (waiting) for (const cb of [...waiting]) cb()
+}
+
+const invalidationListeners = new Map<string, Set<() => void>>()
+
+/**
+ * Call back when this photo's thumbnail is invalidated - i.e. its blob was just
+ * written. A mounted tile that read IndexedDB before "Download all" reached it
+ * is parked as missing and would otherwise stay grey until remounted.
+ * Returns the unsubscribe function.
+ */
+export function subscribeThumbnailInvalidated(id: string, cb: () => void): () => void {
+  let set = invalidationListeners.get(id)
+  if (!set) invalidationListeners.set(id, (set = new Set()))
+  set.add(cb)
+  return () => {
+    set.delete(cb)
+    if (!set.size) invalidationListeners.delete(id)
+  }
 }
 
 /**

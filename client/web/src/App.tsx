@@ -120,6 +120,9 @@ function App() {
       setSyncMessage(
         `${result.added} new, ${result.updated} updated, ${result.removed} removed, ${result.total} total`,
       )
+      // The browser demo has no slow link to protect and is useless as a grid
+      // of grey tiles, so it fetches its thumbnails straight away.
+      if (import.meta.env.VITE_DEMO) void runDownloadAll()
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       // A sync is also a live authorisation check, and the only place a

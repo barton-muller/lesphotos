@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  <a href="https://barton-muller.github.io/lesphotos/"><b>Try the live demo</b></a> (runs entirely in your browser)
+</p>
+
+<p align="center">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue"></a>
   <img alt="About 50 MB of memory" src="https://img.shields.io/badge/memory-~50%20MB-orange">
   <img alt="Installable PWA" src="https://img.shields.io/badge/app-installable%20PWA-5a0fc8">
