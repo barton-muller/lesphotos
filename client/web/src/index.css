@@ -167,13 +167,34 @@ div:hover > .favorite-toggle {
   flex-shrink: 0;
 }
 
-/* The slot is a horizontal-scroll strip (App.tsx: overflowX: auto) for
-   narrow viewports - without this, a flex child with no intrinsic width
-   (a button's text, a plain span) wraps onto a second line and grows the
-   whole toolbar tall instead of the strip scrolling sideways. */
+/* The toolbar slot (App.tsx) is shared by Select / Merge and, once something is
+   selected, their name box and confirm tick. A button's text can't shrink, so
+   every direct child stays on one line and keeps its size...
+   ...except text boxes. They take whatever room is left instead of their
+   intrinsic ~190px width, so the confirm tick stays on screen. Only if even
+   their minimum widths don't fit does the slot wrap onto a second line; it
+   never scrolls sideways, which hid the tick behind a swipe on phones. */
 #lesphotos-toolbar-slot > * {
   white-space: nowrap;
   flex-shrink: 0;
+}
+#lesphotos-toolbar-slot > input {
+  flex: 1 1 110px;
+  min-width: 80px;
+}
+#lesphotos-toolbar-slot > input[type='date'] {
+  flex: 0 1 132px;
+  min-width: 112px;
+  padding: 0 6px;
+}
+@media (max-width: 600px) {
+  .suggest-label {
+    display: none;
+  }
+  .count-chip {
+    padding: 0 8px;
+    gap: 4px;
+  }
 }
 
 /* Status bar's activity dot. Inline styles can't declare keyframes. */

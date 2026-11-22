@@ -31,6 +31,10 @@ def main() -> None:
     ap.add_argument("--user", required=True)
     ap.add_argument("--password", required=True)
     ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument(
+        "--star-every", type=int, default=0,
+        help="favorite every Nth photo first, so the demo's starred filter has something to show",
+    )
     args = ap.parse_args()
 
     api = args.base.rstrip("/") + "/lesphotos-api"
@@ -54,6 +58,11 @@ def main() -> None:
         if len(page) < PAGE:
             break
         offset += PAGE
+
+    if args.star_every:
+        for row in rows[:: args.star_every]:
+            call("/favorite", {"path": row["path"].removeprefix("/photos/"), "favorite": True})
+            row["favorite"] = True
 
     out = args.out
     if out.exists():

@@ -1311,7 +1311,7 @@ export function Timeline({
               style={{ display: 'flex', alignItems: 'center', gap: 4 }}
             >
               <PinIcon size={13} />
-              Suggest
+              <span className="suggest-label">Suggest</span>
             </button>
             <button
               type="button"

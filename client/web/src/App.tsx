@@ -467,7 +467,7 @@ function App() {
             state stays where it is used rather than being lifted into App. */}
         <div
           id="lesphotos-toolbar-slot"
-          style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, overflowX: 'auto' }}
+          style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, rowGap: 6, flexWrap: 'wrap' }}
         />
 
         <div style={{ position: 'relative' }}>
